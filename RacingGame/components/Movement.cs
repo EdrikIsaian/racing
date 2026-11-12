@@ -5,7 +5,9 @@ class Movement
     public double CurrentSpeed;
     public bool Accelerate;
     public bool Brake;
-    
+
+    private const double BrakeForce = 0.5;
+
     public Movement()
     {
         CurrentSpeed = 0;
@@ -13,22 +15,18 @@ class Movement
         Brake = false;
     }
 
-    public void Update()
+    public void Update(Car car)
     {
         Accelerate = Raylib.IsKeyDown(KeyboardKey.W);
         Brake = Raylib.IsKeyDown(KeyboardKey.S);
-        Console.WriteLine($"Z: {Accelerate}  S: {Brake}");
 
         if (Brake)
         {
-            CurrentSpeed = Math.Max(0, CurrentSpeed - 0.1);
+            CurrentSpeed = Math.Max(0, CurrentSpeed - BrakeForce);
         }
-
         else if (Accelerate)
         {
-            CurrentSpeed += 0.1;
+            CurrentSpeed = Math.Min(car.MaxSpeed, CurrentSpeed + car.Acceleration);
         }
-
     }
-
 }
