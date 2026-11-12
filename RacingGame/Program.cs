@@ -1,48 +1,20 @@
 ﻿using Raylib_cs;
 
-Raylib.InitWindow(800, 450, "Racing Game");
+Raylib.SetConfigFlags(ConfigFlags.Msaa4xHint | ConfigFlags.VSyncHint);
+Raylib.InitWindow(1280, 720, "Racing Game");
 Raylib.SetTargetFPS(120);
+Raylib.SetExitKey(KeyboardKey.Null); // Esc pauses instead of closing the window
 
-Car GLC = new Car("Mercedes-Benz", "GLC", CarType.SUV, 0.2, 120);
-Car Octavia = new Car("Skoda", "Octavia", CarType.Sedan, 0.25, 140);
-Car LaFerrari = new Car("Ferrari", "LaFerrari", CarType.HyperCar, 0.5, 300);
+Game game = new Game();
 
-Car selectedCar = GLC;
-
-Button glcButton = new Button(20, 120, 220, 40, "GLC", () => selectedCar = GLC);
-Button octaviaButton = new Button(20, 170, 220, 40, "Octavia", () => selectedCar = Octavia);
-Button laFerrariButton = new Button(20, 220, 220, 40, "LaFerrari", () => selectedCar = LaFerrari);
-
-Button startButton = new Button(200, 300, 300, 50, "Start", () =>
+while (!Raylib.WindowShouldClose() && !game.QuitRequested)
 {
-    Console.WriteLine($"Starting race with {selectedCar.Brand} {selectedCar.Model}");
-});
-
-Movement movement = new Movement();
-Track track = new Track();
-
-while (!Raylib.WindowShouldClose())
-{
-    glcButton.Update();
-    octaviaButton.Update();
-    laFerrariButton.Update();
-    startButton.Update();
-    movement.Update(selectedCar);
+    // Time since last frame, capped so a hiccup doesn't teleport the cars
+    float dt = MathF.Min(Raylib.GetFrameTime(), 1f / 30f);
+    game.Update(dt);
 
     Raylib.BeginDrawing();
-    Raylib.ClearBackground(Color.DarkGreen);
-
-    track.Draw();
-
-    Raylib.DrawText("Hello, racer", 20, 20, 20, Color.White);
-    Raylib.DrawText($"Speed: {movement.CurrentSpeed:F0}", 20, 60, 20, Color.White);
-    Raylib.DrawText($"Car: {selectedCar.Brand} {selectedCar.Model}", 20, 90, 20, Color.White);
-
-    glcButton.Draw();
-    octaviaButton.Draw();
-    laFerrariButton.Draw();
-    startButton.Draw();
-
+    game.Draw();
     Raylib.EndDrawing();
 }
 
