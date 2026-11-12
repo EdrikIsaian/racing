@@ -15,7 +15,7 @@ static class Hud
         Raylib.DrawRectangleRounded(new Rectangle(16, 16, 270, 160), 0.12f, 8, Ui.Panel);
         string pos = $"P{position}";
         Ui.Text(pos, 32, 26, 56, Ui.Accent);
-        Ui.Text($"/{race.Racers.Count}", 36 + Raylib.MeasureText(pos, 56), 54, 24, Ui.Muted);
+        Ui.Text($"/{race.Racers.Count}", 36 + Ui.MeasureText(pos, 56), 54, 24, Ui.Muted);
         Ui.TextRight("LAP", 270, 30, 16, Ui.Muted);
         Ui.TextRight($"{p.CurrentLap(race.Laps)}/{race.Laps}", 270, 48, 32, Color.White);
 
@@ -70,7 +70,7 @@ static class Hud
             else if (!p.OnTrack && blink) Ui.TextCentered("OFF TRACK  -  press R to reset", w / 2, h / 2 + 90, 24, new Color(255, 170, 60, 255));
         }
 
-        Raylib.DrawText("W/S gas & brake   A/D steer   Space handbrake   R reset   Esc pause   F full screen", 16, h - 26, 16, new Color(255, 255, 255, 140));
+        Ui.DrawText("W/S gas & brake   A/D steer   Space handbrake   R reset   Esc pause   F full screen", 16, h - 26, 16, new Color(255, 255, 255, 140));
     }
 
     static void DrawTimeRow(string label, float time, int y, Color color)

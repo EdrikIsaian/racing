@@ -93,8 +93,8 @@ class Racer
         DrawCar(Movement.Position, Movement.Heading, Color, 1f, LastSteer);
         if (!IsPlayer)
         {
-            int w = Raylib.MeasureText(Name, 14);
-            Raylib.DrawText(Name, (int)Movement.Position.X - w / 2, (int)Movement.Position.Y - 34, 14, new Color(255, 255, 255, 190));
+            int w = Ui.MeasureText(Name, 14);
+            Ui.DrawText(Name, (int)Movement.Position.X - w / 2, (int)Movement.Position.Y - 34, 14, new Color(255, 255, 255, 190));
         }
     }
 

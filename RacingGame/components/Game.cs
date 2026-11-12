@@ -229,8 +229,8 @@ class Game
 
     static void DrawStat(string label, string value, float ratio, int x, int y)
     {
-        Raylib.DrawText(label, x, y, 14, Ui.Muted);
-        if (value != "") Raylib.DrawText(value, x + 230 - Raylib.MeasureText(value, 14), y, 14, Color.White);
+        Ui.DrawText(label, x, y, 14, Ui.Muted);
+        if (value != "") Ui.DrawText(value, x + 230 - Ui.MeasureText(value, 14), y, 14, Color.White);
         Raylib.DrawRectangleRounded(new Rectangle(x, y + 17, 230, 7), 1f, 6, new Color(50, 56, 74, 255));
         Raylib.DrawRectangleRounded(new Rectangle(x, y + 17, 230 * Math.Clamp(ratio, 0.05f, 1f), 7), 1f, 6, Ui.Accent);
     }
@@ -255,10 +255,10 @@ class Game
         Ui.TextCentered(headline, w / 2, 112, 48, place == 1 ? Ui.Accent : Color.White);
 
         int x = (int)panel.X + 40, y = 190;
-        Raylib.DrawText("POS", x, y, 16, Ui.Muted);
-        Raylib.DrawText("DRIVER", x + 70, y, 16, Ui.Muted);
-        Raylib.DrawText("TIME", x + 340, y, 16, Ui.Muted);
-        Raylib.DrawText("BEST LAP", x + 500, y, 16, Ui.Muted);
+        Ui.DrawText("POS", x, y, 16, Ui.Muted);
+        Ui.DrawText("DRIVER", x + 70, y, 16, Ui.Muted);
+        Ui.DrawText("TIME", x + 340, y, 16, Ui.Muted);
+        Ui.DrawText("BEST LAP", x + 500, y, 16, Ui.Muted);
 
         List<Racer> standings = r.Standings();
         for (int i = 0; i < standings.Count; i++)

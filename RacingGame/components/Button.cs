@@ -38,9 +38,9 @@ class Button
         Raylib.DrawRectangleRounded(Bounds, 0.25f, 8, fill);
         if (!Primary) Raylib.DrawRectangleRoundedLinesEx(Bounds, 0.25f, 8, 2, hovered ? Ui.Accent : new Color(80, 90, 120, 255));
 
-        int textWidth = Raylib.MeasureText(Label, FontSize);
+        int textWidth = Ui.MeasureText(Label, FontSize);
         int textX = (int)(Bounds.X + (Bounds.Width - textWidth) / 2);
         int textY = (int)(Bounds.Y + (Bounds.Height - FontSize) / 2);
-        Raylib.DrawText(Label, textX, textY, FontSize, text);
+        Ui.DrawText(Label, textX, textY, FontSize, text);
     }
 }

@@ -1,10 +1,12 @@
 ﻿using Raylib_cs;
 
-Raylib.SetConfigFlags(ConfigFlags.Msaa4xHint | ConfigFlags.VSyncHint | ConfigFlags.ResizableWindow);
+// HighDpiWindow = render at full Retina resolution instead of upscaling a blurry image
+Raylib.SetConfigFlags(ConfigFlags.Msaa4xHint | ConfigFlags.VSyncHint | ConfigFlags.ResizableWindow | ConfigFlags.HighDpiWindow);
 Raylib.InitWindow(Ui.BaseWidth, Ui.BaseHeight, "Racing Game");
 Raylib.SetTargetFPS(120);
 Raylib.SetExitKey(KeyboardKey.Null); // Esc pauses instead of closing the window
 Raylib.ToggleBorderlessWindowed();   // start full screen
+Ui.LoadFont();
 
 Game game = new Game();
 
@@ -23,4 +25,5 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
     Raylib.EndDrawing();
 }
 
+Ui.UnloadFont();
 Raylib.CloseWindow();
