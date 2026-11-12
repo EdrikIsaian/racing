@@ -175,7 +175,7 @@ class Race
         camera.Target = Vector2.Lerp(camera.Target, m.Position + m.Velocity * 0.35f, t);
 
         float speedRatio = m.Velocity.Length() / (Player.Car.MaxSpeed * Movement.PixelsPerKmh);
-        float targetZoom = 1.05f - 0.35f * speedRatio;
+        float targetZoom = (1.05f - 0.35f * speedRatio) * Ui.Scale; // same view on any screen size
         camera.Zoom += (targetZoom - camera.Zoom) * t * 0.5f;
     }
 
@@ -201,7 +201,9 @@ class Race
         foreach (Racer r in Racers) r.Draw();
         Raylib.EndMode2D();
 
+        Ui.BeginHud();
         Hud.Draw(this);
+        Ui.End();
     }
 
     // Checkerboard grass so you can feel your speed even off the track.

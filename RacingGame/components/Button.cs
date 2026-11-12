@@ -17,7 +17,7 @@ class Button
         Primary = primary;
     }
 
-    bool Hovered => Raylib.CheckCollisionPointRec(Raylib.GetMousePosition(), Bounds);
+    bool Hovered => Raylib.CheckCollisionPointRec(Ui.Mouse, Bounds);
 
     public void Update()
     {

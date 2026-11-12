@@ -138,7 +138,7 @@ class Game
         if (Raylib.IsMouseButtonPressed(MouseButton.Left))
         {
             for (int i = 0; i < cars.Count; i++)
-                if (Raylib.CheckCollisionPointRec(Raylib.GetMousePosition(), CardRect(i)))
+                if (Raylib.CheckCollisionPointRec(Ui.Mouse, CardRect(i)))
                     selectedCar = i;
         }
 
@@ -148,7 +148,7 @@ class Game
     Rectangle CardRect(int i)
     {
         int total = cars.Count * CardWidth + (cars.Count - 1) * CardGap;
-        int x = (Raylib.GetScreenWidth() - total) / 2 + i * (CardWidth + CardGap);
+        int x = (Ui.BaseWidth - total) / 2 + i * (CardWidth + CardGap);
         return new Rectangle(x, CardY, CardWidth, CardHeight);
     }
 
@@ -165,20 +165,26 @@ class Game
             case GameState.Paused:
                 race!.Draw();
                 Ui.Overlay();
-                Ui.TextCentered("PAUSED", Raylib.GetScreenWidth() / 2, 200, 60, Color.White);
+                Ui.BeginMenu();
+                Ui.TextCentered("PAUSED", Ui.BaseWidth / 2, 200, 60, Color.White);
                 foreach (Button b in pauseButtons) b.Draw();
+                Ui.End();
                 break;
             case GameState.Results:
                 race!.Draw();
+                Ui.Overlay(130);
+                Ui.BeginMenu();
                 DrawResults();
+                Ui.End();
                 break;
         }
     }
 
     void DrawMenu()
     {
-        int w = Raylib.GetScreenWidth(), h = Raylib.GetScreenHeight();
-        Raylib.DrawRectangleGradientV(0, 0, w, h, new Color(18, 22, 36, 255), new Color(40, 22, 30, 255));
+        Raylib.DrawRectangleGradientV(0, 0, Raylib.GetScreenWidth(), Raylib.GetScreenHeight(), new Color(18, 22, 36, 255), new Color(40, 22, 30, 255));
+        Ui.BeginMenu();
+        int w = Ui.BaseWidth;
         Ui.TextCentered("RACING GAME", w / 2, 36, 60, Ui.Accent);
         Ui.TextCentered("Choose your car", w / 2, 102, 20, Ui.Muted);
 
@@ -191,7 +197,8 @@ class Game
         foreach (Button b in menuButtons) b.Draw();
 
         Ui.TextCentered("Arrows / A-D to pick a car   Enter to start   Esc to quit", w / 2, 670, 16, Ui.Muted);
-        Ui.TextCentered("Opponents drive the same car as you", w / 2, 692, 14, new Color(120, 126, 140, 255));
+        Ui.TextCentered("Opponents drive the same car as you   -   F toggles full screen", w / 2, 692, 14, new Color(120, 126, 140, 255));
+        Ui.End();
     }
 
     void DrawCarCard(int i)
@@ -199,7 +206,7 @@ class Game
         Car car = cars[i];
         Rectangle r = CardRect(i);
         bool selected = i == selectedCar;
-        bool hovered = Raylib.CheckCollisionPointRec(Raylib.GetMousePosition(), r);
+        bool hovered = Raylib.CheckCollisionPointRec(Ui.Mouse, r);
 
         Raylib.DrawRectangleRounded(r, 0.08f, 8, hovered && !selected ? Ui.PanelLight : Ui.Panel);
         Raylib.DrawRectangleRoundedLinesEx(r, 0.08f, 8, selected ? 4 : 2, selected ? Ui.Accent : new Color(60, 68, 90, 255));
@@ -238,8 +245,7 @@ class Game
     void DrawResults()
     {
         Race r = race!;
-        int w = Raylib.GetScreenWidth();
-        Ui.Overlay(130);
+        int w = Ui.BaseWidth;
 
         var panel = new Rectangle(w / 2 - 360, 90, 720, 470);
         Raylib.DrawRectangleRounded(panel, 0.06f, 8, Ui.Panel);

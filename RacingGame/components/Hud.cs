@@ -6,7 +6,7 @@ static class Hud
 {
     public static void Draw(Race race)
     {
-        int w = Raylib.GetScreenWidth(), h = Raylib.GetScreenHeight();
+        int w = Ui.Width, h = Ui.Height;
         Racer p = race.Player;
         List<Racer> standings = race.Standings();
         int position = standings.IndexOf(p) + 1;
@@ -70,7 +70,7 @@ static class Hud
             else if (!p.OnTrack && blink) Ui.TextCentered("OFF TRACK  -  press R to reset", w / 2, h / 2 + 90, 24, new Color(255, 170, 60, 255));
         }
 
-        Raylib.DrawText("W/S gas & brake   A/D steer   Space handbrake   R reset   Esc pause", 16, h - 26, 16, new Color(255, 255, 255, 140));
+        Raylib.DrawText("W/S gas & brake   A/D steer   Space handbrake   R reset   Esc pause   F full screen", 16, h - 26, 16, new Color(255, 255, 255, 140));
     }
 
     static void DrawTimeRow(string label, float time, int y, Color color)

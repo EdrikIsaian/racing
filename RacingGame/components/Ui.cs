@@ -1,8 +1,41 @@
+using System.Numerics;
 using Raylib_cs;
 
 // Small drawing helpers and shared colours for menus and the HUD.
+// Menus and the HUD are laid out for a 1280x720 screen and scaled up/down to fit any window size.
 static class Ui
 {
+    public const int BaseWidth = 1280, BaseHeight = 720;
+
+    public static float Scale => MathF.Min(Raylib.GetScreenWidth() / (float)BaseWidth, Raylib.GetScreenHeight() / (float)BaseHeight);
+
+    // Size of the screen in UI units (at least 1280x720; wider screens get more width)
+    public static int Width => (int)(Raylib.GetScreenWidth() / Scale);
+    public static int Height => (int)(Raylib.GetScreenHeight() / Scale);
+
+    static Camera2D current = new Camera2D(Vector2.Zero, Vector2.Zero, 0, 1);
+
+    // HUD: stretches over the whole screen, anchored to the corners
+    public static void BeginHud()
+    {
+        current = new Camera2D(Vector2.Zero, Vector2.Zero, 0, Scale);
+        Raylib.BeginMode2D(current);
+    }
+
+    // Menus: a 1280x720 area centred on the screen
+    public static void BeginMenu()
+    {
+        float s = Scale;
+        Vector2 offset = new((Raylib.GetScreenWidth() - BaseWidth * s) / 2, (Raylib.GetScreenHeight() - BaseHeight * s) / 2);
+        current = new Camera2D(offset, Vector2.Zero, 0, s);
+        Raylib.BeginMode2D(current);
+    }
+
+    public static void End() => Raylib.EndMode2D();
+
+    // Mouse position in UI units (matches the coordinates buttons are laid out in)
+    public static Vector2 Mouse => Raylib.GetScreenToWorld2D(Raylib.GetMousePosition(), current);
+
     public static readonly Color Panel = new Color(14, 17, 26, 210);
     public static readonly Color PanelLight = new Color(32, 38, 56, 230);
     public static readonly Color Accent = new Color(255, 196, 0, 255);
