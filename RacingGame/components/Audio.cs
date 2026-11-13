@@ -22,7 +22,7 @@ static unsafe class Audio
     public static bool MusicMuted;
     public static bool Enabled { get; private set; }
 
-    const float MusicVolume = 0.42f, SfxVolume = 0.8f, EngineVolume = 0.9f;
+    const float MusicVolume = 1.0f, SfxVolume = 0.4f, EngineVolume = 0.45f;
 
     // ---- music
     enum Track { None, Menu, Race }
@@ -77,7 +77,7 @@ static unsafe class Audio
         // background.* plays everywhere, menu.* / race.* only on that screen.
         MusicSource? background = LoadMusicFile("background");
         music[(int)Track.Menu] = LoadMusicFile("menu") ?? background;
-        music[(int)Track.Race] = LoadMusicFile("race") ?? (background != null ? LoadMusicFile("background") : null);
+        music[(int)Track.Race] = LoadMusicFile("race") ?? background; // shared, so it keeps playing across screens
 
         // Generated music takes a moment to synthesize, so do it in the background
         if (music[(int)Track.Menu] == null || music[(int)Track.Race] == null)
@@ -88,7 +88,7 @@ static unsafe class Audio
     {
         if (!Enabled) return;
         foreach (var s in new[] { beep, go, shift, crash, lap, finalLap, finish, click, whoosh }) Raylib.UnloadSound(s);
-        foreach (var m in music) m?.Unload();
+        foreach (var m in music.Distinct()) m?.Unload();
         Raylib.UnloadAudioStream(engineStream);
         Raylib.CloseAudioDevice();
     }
@@ -112,8 +112,9 @@ static unsafe class Audio
         for (int i = 1; i < music.Length; i++)
         {
             MusicSource? m = music[i];
-            if (m == null) continue;
-            float target = !MusicMuted && (int)wanted == i ? MusicVolume : 0;
+            if (m == null || Array.IndexOf(music, m) != i) continue; // same source in two slots: update once
+            bool active = music[(int)wanted] == m;
+            float target = !MusicMuted && active ? MusicVolume : 0;
             m.Volume += (target - m.Volume) * (1 - MathF.Exp(-2.5f * dt));
             m.Update();
         }
