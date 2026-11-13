@@ -82,6 +82,8 @@ class Game
         showcaseDir = delta;
     }
 
+    public void StartRaceNow() => StartRace();
+
     void StartRace()
     {
         race = new Race(cars[selectedCar], opponents, laps, DifficultySkill[difficulty]);
@@ -173,6 +175,21 @@ class Game
         return new Rectangle(StripX + i * (w + StripGap), StripY, w, StripH);
     }
 
+    // Menu showroom area in UI units; the 3D car image is drawn into it
+    static readonly Rectangle ShowcaseArea = new(80, 196, 720, 400);
+
+    // 3D renders that go into their own images. Runs before the frame starts drawing.
+    public void PreDraw()
+    {
+        if (state != GameState.Menu) return;
+        Car car = cars[selectedCar];
+        float e = 1 - MathF.Pow(1 - showcaseT, 3);
+        // Twice the screen resolution, then shrunk: smooth edges
+        float pixels = Ui.Scale * Raylib.GetRenderWidth() / (float)Raylib.GetScreenWidth() * 2;
+        float spin = -2.4f + (float)Raylib.GetTime() * 0.35f;
+        Showcase.Render(car.Type, car.Color, spin, 0.85f + 0.15f * e, (int)(ShowcaseArea.Width * pixels), (int)(ShowcaseArea.Height * pixels));
+    }
+
     public void Draw()
     {
         if (state != lastState) { overlayT = 0; lastState = state; }
@@ -252,23 +269,11 @@ class Game
         Ui.DrawText(car.Model.ToUpperInvariant(), 78 + slide * 0.5f, 124, 88, fade, Typeface.Display, 0.02f);
         Ui.Pill(ClassName(car.Type), 82 + slide * 0.5f, 212, new Color(255, 255, 255, (int)(20 * e)), Ui.Alpha(Ui.Muted, e));
 
-        // Turntable
-        Ui.Circle(Turntable, 176, new Color(0, 0, 0, 70));
-        Ui.CircleGradient(Turntable, 172, new Color(34, 38, 48, 255), new Color(16, 18, 24, 255));
-        Ui.CircleLines(Turntable, 172, new Color(255, 255, 255, 34));
-        Ui.CircleLines(Turntable, 150, new Color(255, 255, 255, 12));
-        for (int i = 0; i < 72; i++)
-        {
-            float ang = i * 5 * MathF.PI / 180 + time * 0.25f;
-            Vector2 d = new(MathF.Cos(ang), MathF.Sin(ang));
-            bool major = i % 6 == 0;
-            Raylib.DrawLineEx(Turntable + d * (major ? 156 : 160), Turntable + d * 166, major ? 2 : 1, new Color(255, 255, 255, major ? 60 : 22));
-        }
-        Ui.Glow(Turntable, 150, Ui.Alpha(car.Color, 0.16f));
-
-        float heading = -MathF.PI / 2 + time * 0.35f;
-        Vector2 carPos = Turntable + new Vector2(slide * 3, 0);
-        Racer.DrawCar(carPos, heading, car.Color, 4.6f * (0.85f + 0.15f * e), MathF.Sin(time * 0.8f) * 0.4f, car.Type);
+        // Turntable with the 3D car (rendered beforehand in PreDraw)
+        Texture2D tex = Showcase.Texture;
+        Rectangle area = ShowcaseArea;
+        area.X += slide * 3;
+        Raylib.DrawTexturePro(tex, new Rectangle(0, 0, tex.Width, -tex.Height), area, Vector2.Zero, 0, Color.White);
 
         // Car picker strip
         for (int i = 0; i < cars.Count; i++) DrawCarTab(i);

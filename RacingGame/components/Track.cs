@@ -175,30 +175,37 @@ class Track
         return (pos, HeadingAt(index), index);
     }
 
-    // Only what's inside `view` (world coordinates) gets drawn; the rest of the circuit is skipped.
-    public void Draw(Rectangle view)
-    {
-        // Widest thing drawn around the centre line is the grass verge
-        const float margin = (Width + 90) / 2 + 10;
-        Rectangle segView = Grow(view, margin);
+    // ---- 3D drawing. Ground layers are flat (see Scene3D.BeginGround); trees and the gantry are models.
 
-        // Tree shadows first so they never sit on top of a neighbour
+    public void DrawGround()
+    {
+        // Grass with mowed stripes in both directions around the circuit, so you can feel your speed
+        Vector2 lo = BoundsMin - new Vector2(9000), hi = BoundsMax + new Vector2(9000);
+        Scene3D.Quad(lo, new Vector2(hi.X, lo.Y), hi, new Vector2(lo.X, hi.Y), new Color(70, 120, 60, 255));
+        const int band = 150;
+        Color stripe = new(0, 0, 0, 14);
+        int x0 = (int)((BoundsMin.X - 2400) / band), x1 = (int)((BoundsMax.X + 2400) / band);
+        int y0 = (int)((BoundsMin.Y - 2400) / band), y1 = (int)((BoundsMax.Y + 2400) / band);
+        for (int x = x0; x <= x1; x += 2)
+            Scene3D.Quad(new(x * band, y0 * band), new((x + 1) * band, y0 * band), new((x + 1) * band, y1 * band), new(x * band, y1 * band), stripe);
+        for (int y = y0; y <= y1; y += 2)
+            Scene3D.Quad(new(x0 * band, y * band), new(x1 * band, y * band), new(x1 * band, (y + 1) * band), new(x0 * band, (y + 1) * band), stripe);
+
+        // Tree shadows
         foreach (var (pos, size, _) in trees)
-            if (Visible(pos, size * 1.1f + 20, view))
-                Ui.Circle(pos + new Vector2(10, 14), size * 1.05f, new Color(0, 0, 0, 46));
+            Scene3D.Disc(pos + new Vector2(Scene3D.SunDir.X, Scene3D.SunDir.Z) * size * 1.2f, size * 1.25f, size * 1.0f, new Vector2(1, 0), new Color(0, 0, 0, 52), 14);
 
         // Layers from the outside in: darker grass verge, kerb-side shoulder, asphalt, rubbered line
-        Band(Width + 90, new Color(55, 98, 50, 255), segView);
-        Band(Width + 26, new Color(36, 38, 43, 255), segView);
-        Band(Width, new Color(57, 59, 65, 255), segView);
-        Band(Width * 0.38f, new Color(52, 54, 60, 255), segView);
+        Band(Width + 90, new Color(58, 102, 52, 255));
+        Band(Width + 26, new Color(36, 38, 43, 255));
+        Band(Width, new Color(62, 64, 70, 255));
+        Band(Width * 0.38f, new Color(56, 58, 64, 255));
 
         // Edges: red/white kerbs in corners, a white line on straights
         Color kerbRed = new(206, 36, 44, 255), kerbWhite = new(242, 242, 244, 255);
         Color lip = new(30, 30, 34, 255), edgeLine = new(228, 230, 234, 255);
         for (int i = 0; i < Count; i++)
         {
-            if (!SegmentVisible(i, segView)) continue;
             int j = (i + 1) % Count;
             for (int side = -1; side <= 1; side += 2)
             {
@@ -214,94 +221,61 @@ class Track
             }
         }
 
-        if (Visible(Points[0], Width * 2, view))
-        {
-            DrawGridBoxes();
-            DrawStartLine();
-        }
-
-        foreach (var (pos, size, k) in trees)
-        {
-            if (!Visible(pos, size, view)) continue;
-            Ui.Circle(pos, size, Tint(new Color(26, 70, 36, 255), k));
-            Ui.Circle(pos - new Vector2(size * 0.12f, size * 0.15f), size * 0.8f, Tint(new Color(38, 94, 44, 255), k));
-            Ui.Circle(pos - new Vector2(size * 0.26f, size * 0.3f), size * 0.5f, Tint(new Color(58, 124, 56, 255), k));
-            Ui.Circle(pos - new Vector2(size * 0.36f, size * 0.42f), size * 0.2f, Tint(new Color(92, 156, 78, 255), k));
-        }
+        DrawGridBoxes();
+        DrawStartLine();
     }
 
-    static Rectangle Grow(Rectangle r, float by) => new(r.X - by, r.Y - by, r.Width + by * 2, r.Height + by * 2);
-
-    static bool Visible(Vector2 p, float radius, Rectangle view) =>
-        p.X + radius >= view.X && p.X - radius <= view.X + view.Width &&
-        p.Y + radius >= view.Y && p.Y - radius <= view.Y + view.Height;
-
-    // Segment i → i+1 touches the (already grown) view rectangle
-    bool SegmentVisible(int i, Rectangle view)
+    // Trees and the start gantry. Skips trees behind the camera or lost in the fog.
+    public void DrawScenery(Vector3 cameraPos, Vector3 cameraForward)
     {
-        Vector2 a = Points[i], b = Points[(i + 1) % Count];
-        return MathF.Max(a.X, b.X) >= view.X && MathF.Min(a.X, b.X) <= view.X + view.Width &&
-               MathF.Max(a.Y, b.Y) >= view.Y && MathF.Min(a.Y, b.Y) <= view.Y + view.Height;
+        Vector2 cam = new(cameraPos.X, cameraPos.Z);
+        Vector2 fwd = Vector2.Normalize(new Vector2(cameraForward.X, cameraForward.Z));
+        float maxDist = Scene3D.FogEnd + 200;
+        for (int i = 0; i < trees.Count; i++)
+        {
+            var (pos, size, k) = trees[i];
+            Vector2 d = pos - cam;
+            float dist = d.Length();
+            if (dist > maxDist) continue;
+            if (dist > 300 && Vector2.Dot(d / dist, fwd) < 0.2f) continue; // behind us
+            Scene3D.DrawTree(pos, size, k, i);
+        }
+        Scene3D.DrawGantry(Points[0] + DirectionAt(0) * 14, HeadingAt(0));
     }
 
-    // A continuous band of the given width along the centre line, as one quad per segment.
-    // (Drawing it as thick lines plus a circle at every point covered each pixel ~10 times over.)
-    void Band(float width, Color color, Rectangle view)
+    // A continuous band of the given width along the centre line, as one quad per segment
+    void Band(float width, Color color)
     {
         for (int i = 0; i < Count; i++)
-            if (SegmentVisible(i, view))
-                Strip(i, (i + 1) % Count, -width / 2, width / 2, color);
+            Strip(i, (i + 1) % Count, -width / 2, width / 2, color);
     }
 
     // Quad between two offsets (signed distances along the normal) from point i to point j
     void Strip(int i, int j, float from, float to, Color color)
     {
         Vector2 pi = Points[i], pj = Points[j], ni = joinNormals[i], nj = joinNormals[j];
-        Quad(pi + ni * from, pj + nj * from, pj + nj * to, pi + ni * to, color);
+        Scene3D.Quad(pi + ni * from, pj + nj * from, pj + nj * to, pi + ni * to, color);
     }
-
-    static void Quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color color)
-    {
-        Rlgl.CheckRenderBatchLimit(6);
-        Rlgl.Begin(DrawMode.Triangles);
-        Rlgl.Color4ub(color.R, color.G, color.B, color.A);
-        Tri(a, b, c);
-        Tri(a, c, d);
-        Rlgl.End();
-    }
-
-    // raylib skips triangles wound the "wrong" way; flip them instead of drawing everything twice
-    static void Tri(Vector2 a, Vector2 b, Vector2 c)
-    {
-        float cross = (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
-        if (cross > 0) (b, c) = (c, b);
-        Rlgl.Vertex2f(a.X, a.Y);
-        Rlgl.Vertex2f(b.X, b.Y);
-        Rlgl.Vertex2f(c.X, c.Y);
-    }
-
-    static Color Tint(Color c, float k) => new((int)Math.Min(255, c.R * k), (int)Math.Min(255, c.G * k), (int)Math.Min(255, c.B * k), 255);
 
     // White grid-slot brackets behind the start line
     void DrawGridBoxes()
     {
-        Color line = new(236, 238, 242, 210);
+        Color line = new(236, 238, 242, 220);
         for (int slot = 0; slot < 6; slot++)
         {
             var (pos, heading, _) = GridSlot(slot);
             Vector2 f = new(MathF.Cos(heading), MathF.Sin(heading));
             Vector2 n = new(-f.Y, f.X);
-            Vector2 front = pos + f * 24;
-            Raylib.DrawLineEx(front - n * 14, front + n * 14, 3, line);
-            Raylib.DrawLineEx(front - n * 14, front - n * 14 - f * 14, 3, line);
-            Raylib.DrawLineEx(front + n * 14, front + n * 14 - f * 14, 3, line);
+            Vector2 front = pos + f * 26;
+            Scene3D.Box(front, f, 3, 34, line);
+            Scene3D.Box(front - n * 15.5f - f * 8, f, 16, 3, line);
+            Scene3D.Box(front + n * 15.5f - f * 8, f, 16, 3, line);
         }
     }
 
     void DrawStartLine()
     {
         Vector2 p = Points[0], d = DirectionAt(0), nrm = NormalAt(0);
-        float deg = HeadingAt(0) * 180f / MathF.PI;
         const float sq = 10f;
         int cols = (int)(Width / sq);
         for (int k = 0; k < cols; k++)
@@ -310,7 +284,7 @@ class Track
             {
                 Vector2 c = p + nrm * (-Width / 2 + sq / 2 + k * sq + (Width - cols * sq) / 2) + d * (row * sq - sq);
                 Color col = (k + row) % 2 == 0 ? new Color(242, 242, 244, 255) : new Color(18, 18, 20, 255);
-                Raylib.DrawRectanglePro(new Rectangle(c.X, c.Y, sq, sq), new Vector2(sq / 2, sq / 2), deg, col);
+                Scene3D.Box(c, d, sq, sq, col);
             }
         }
     }

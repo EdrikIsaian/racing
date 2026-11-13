@@ -1,0 +1,34 @@
+{
+  "suv": {
+    "wheelRadius": 0.38,
+    "wheelWidth": 0.27,
+    "wheelbase": 2.8,
+    "track": 1.68,
+    "length": 4.6,
+    "width": 1.95
+  },
+  "sedan": {
+    "wheelRadius": 0.33,
+    "wheelWidth": 0.24,
+    "wheelbase": 2.75,
+    "track": 1.58,
+    "length": 4.7,
+    "width": 1.84
+  },
+  "sports": {
+    "wheelRadius": 0.34,
+    "wheelWidth": 0.28,
+    "wheelbase": 2.45,
+    "track": 1.62,
+    "length": 4.5,
+    "width": 1.88
+  },
+  "hyper": {
+    "wheelRadius": 0.35,
+    "wheelWidth": 0.3,
+    "wheelbase": 2.7,
+    "track": 1.7,
+    "length": 4.75,
+    "width": 2.0
+  }
+}

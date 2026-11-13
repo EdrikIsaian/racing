@@ -16,7 +16,8 @@ class Race
     public float LastLapCompletedAt = -10f; // for the "Lap 1: 0:23.4" popup
 
     readonly SkidMarks skidMarks = new();
-    Camera2D camera;
+    Camera3D camera;
+    float camYaw;       // smoothed direction the chase camera looks along
     float playerSteer;
 
     static readonly string[] AiNames = { "Alex", "Sam", "Riley", "Jordan", "Casey" };
@@ -49,7 +50,9 @@ class Race
         Player.PlaceOnGrid(Track, slot);
         Racers.Add(Player);
 
-        camera = new Camera2D(Vector2.Zero, Player.Movement.Position, 0, 1f);
+        camYaw = Player.Movement.Heading;
+        camera = new Camera3D(Vector3.Zero, Vector3.Zero, Vector3.UnitY, 55, CameraProjection.Perspective);
+        UpdateCamera(1f);
     }
 
     public void Update(float dt)
@@ -70,6 +73,7 @@ class Race
             r.LastSteer = input.Steer;
             r.Braking = input.Brake > 0 && r.Movement.ForwardSpeed > 5;
             r.Movement.Update(r.Car, input, r.OnTrack, dt);
+            r.UpdateVisuals(input, dt);
 
             if (r.UpdateTrackPosition(Track, RaceTime, Laps) && r.IsPlayer)
                 LastLapCompletedAt = RaceTime;
@@ -168,16 +172,25 @@ class Race
         }
     }
 
+    // Third-person chase camera: sits behind and above the player and swings round smoothly,
+    // so drifts show the car sliding sideways instead of the whole world snapping round.
     void UpdateCamera(float dt)
     {
         Movement m = Player.Movement;
-        float t = 1 - MathF.Exp(-5f * dt);
-        camera.Offset = new Vector2(Raylib.GetScreenWidth() / 2f, Raylib.GetScreenHeight() / 2f);
-        camera.Target = Vector2.Lerp(camera.Target, m.Position + m.Velocity * 0.35f, t);
+        float speedRatio = Math.Clamp(m.Velocity.Length() / (Player.Car.MaxSpeed * Movement.PixelsPerKmh), 0, 1);
 
-        float speedRatio = m.Velocity.Length() / (Player.Car.MaxSpeed * Movement.PixelsPerKmh);
-        float targetZoom = (1.05f - 0.35f * speedRatio) * Ui.Scale; // same view on any screen size
-        camera.Zoom += (targetZoom - camera.Zoom) * t * 0.5f;
+        camYaw += Track.WrapAngle(m.Heading - camYaw) * (1 - MathF.Exp(-5.5f * dt));
+        Vector2 dir = new(MathF.Cos(camYaw), MathF.Sin(camYaw));
+
+        float distance = 74 + 26 * speedRatio;
+        float height = 29 + 5 * speedRatio;
+        Vector3 wantPos = Scene3D.W(m.Position - dir * distance, height);
+        Vector3 wantTarget = Scene3D.W(m.Position + dir * 46, 9);
+
+        float t = 1 - MathF.Exp(-14f * dt);
+        camera.Position = Vector3.Lerp(camera.Position, wantPos, t);
+        camera.Target = Vector3.Lerp(camera.Target, wantTarget, t);
+        camera.FovY += (54 + 14 * speedRatio - camera.FovY) * (1 - MathF.Exp(-3f * dt)); // widen with speed
     }
 
     // Finished racers in finishing order, then everyone else by how far they've got.
@@ -194,45 +207,48 @@ class Race
 
     public void Draw()
     {
-        Raylib.ClearBackground(new Color(66, 116, 58, 255));
-        Raylib.BeginMode2D(camera);
-        Rectangle view = VisibleWorld();
-        DrawGrass();
-        Track.Draw(view);
-        skidMarks.Draw(view);
-        foreach (Racer r in Racers) r.Draw();
-        foreach (Racer r in Racers) r.DrawNameTag();
-        Raylib.EndMode2D();
+        // Sky
+        int sw = Raylib.GetScreenWidth(), sh = Raylib.GetScreenHeight();
+        Raylib.ClearBackground(Scene3D.Horizon);
+        Raylib.DrawRectangleGradientV(0, 0, sw, sh / 2, Scene3D.SkyTop, Scene3D.Horizon);
 
-        Ui.Vignette(0.55f);
+        Raylib.BeginMode3D(camera);
+        Scene3D.SetView(camera.Position, Scene3D.FogStart, Scene3D.FogEnd, Scene3D.Horizon);
+
+        Scene3D.BeginGround();
+        Track.DrawGround();
+        skidMarks.Draw();
+        foreach (Racer r in Racers) Scene3D.CarShadow(r.Movement.Position, r.Movement.Heading, r.Car.Type);
+        Scene3D.EndGround();
+
+        Track.DrawScenery(camera.Position, camera.Target - camera.Position);
+        foreach (Racer r in Racers) r.Draw();
+        Raylib.EndMode3D();
+        Supersample.Setup2D();
+
+        DrawNameTags();
+
+        Ui.Vignette(0.45f);
         Ui.BeginHud();
         Hud.Draw(this);
         Ui.End();
     }
 
-    // The part of the world the camera can currently see
-    Rectangle VisibleWorld()
+    // Name tags float above the AI cars; projected from 3D to the screen
+    void DrawNameTags()
     {
-        Vector2 a = Raylib.GetScreenToWorld2D(Vector2.Zero, camera);
-        Vector2 b = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), camera);
-        return new Rectangle(a.X, a.Y, b.X - a.X, b.Y - a.Y);
-    }
-
-    // Mowed-lawn plaid: light/dark stripes in both directions so you can feel your speed anywhere.
-    void DrawGrass()
-    {
-        const int band = 150;
-        Vector2 topLeft = Raylib.GetScreenToWorld2D(Vector2.Zero, camera);
-        Vector2 bottomRight = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), camera);
-        int x0 = (int)MathF.Floor(topLeft.X / band), x1 = (int)MathF.Ceiling(bottomRight.X / band);
-        int y0 = (int)MathF.Floor(topLeft.Y / band), y1 = (int)MathF.Ceiling(bottomRight.Y / band);
-        int top = y0 * band, height = (y1 - y0 + 1) * band;
-        int left = x0 * band, width = (x1 - x0 + 1) * band;
-        Color stripe = new(0, 0, 0, 16);
-        for (int x = x0; x <= x1; x++)
-            if ((x & 1) == 0) Raylib.DrawRectangle(x * band, top, band, height, stripe);
-        for (int y = y0; y <= y1; y++)
-            if ((y & 1) == 0) Raylib.DrawRectangle(left, y * band, width, band, stripe);
+        Vector3 forward = Vector3.Normalize(camera.Target - camera.Position);
+        foreach (Racer r in Racers)
+        {
+            if (r.IsPlayer) continue;
+            Vector3 p = Scene3D.W(r.Movement.Position, 24);
+            Vector3 d = p - camera.Position;
+            float dist = d.Length();
+            if (Vector3.Dot(d, forward) < 10 || dist > 2600) continue; // behind the camera or too far
+            Vector2 screen = Raylib.GetWorldToScreen(p, camera);
+            float alpha = Math.Clamp((2600 - dist) / 600, 0, 1);
+            r.DrawNameTag(screen, Ui.Scale * Math.Clamp(260 / dist, 0.7f, 1.15f), alpha);
+        }
     }
 }
 
@@ -252,16 +268,15 @@ class SkidMarks
         count = Math.Min(count + 1, Max);
     }
 
-    public void Draw(Rectangle view)
+    public void Draw()
     {
         Color c = new Color(20, 20, 22, 95);
-        float x0 = view.X - 4, y0 = view.Y - 4, x1 = view.X + view.Width + 4, y1 = view.Y + view.Height + 4;
         for (int i = 0; i < count; i++)
         {
-            Vector2 a = starts[i], b = ends[i];
-            if (MathF.Max(a.X, b.X) < x0 || MathF.Min(a.X, b.X) > x1 || MathF.Max(a.Y, b.Y) < y0 || MathF.Min(a.Y, b.Y) > y1)
-                continue; // off screen
-            Raylib.DrawLineEx(a, b, 4, c);
+            Vector2 a = starts[i], b = ends[i], d = b - a;
+            float len = d.Length();
+            if (len < 0.01f) continue;
+            Scene3D.Box((a + b) / 2, d / len, len, 4, c);
         }
     }
 }

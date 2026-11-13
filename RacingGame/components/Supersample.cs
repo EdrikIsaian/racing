@@ -22,6 +22,7 @@ static class Supersample
         if (!active)
         {
             Raylib.BeginDrawing();
+            Setup2D();
             return;
         }
 
@@ -37,7 +38,14 @@ static class Supersample
         Raylib.BeginDrawing();
         Raylib.BeginTextureMode(target);
 
-        // Keep the game's coordinates (screen points) but spread them over the bigger image
+        Setup2D();
+    }
+
+    // 2D drawing in screen points, whatever the pixel density or render target.
+    // Also needed after a 3D pass: raylib's EndMode3D restores a Retina-scaled matrix that
+    // BeginMode2D would then ignore, drawing the HUD at half size.
+    public static void Setup2D()
+    {
         Rlgl.DrawRenderBatchActive();
         Rlgl.MatrixMode(MatrixMode.Projection);
         Rlgl.LoadIdentity();
@@ -45,6 +53,8 @@ static class Supersample
         Rlgl.MatrixMode(MatrixMode.ModelView);
         Rlgl.LoadIdentity();
     }
+
+    public static string? CaptureTo; // file name for a screenshot of this frame
 
     public static void End()
     {
@@ -63,6 +73,11 @@ static class Supersample
                 Vector2.Zero, 0, Color.White);
             Rlgl.DrawRenderBatchActive();
             Rlgl.EnableColorBlend();
+        }
+        if (CaptureTo != null)
+        {
+            Raylib.TakeScreenshot(CaptureTo);
+            CaptureTo = null;
         }
         Raylib.EndDrawing();
     }

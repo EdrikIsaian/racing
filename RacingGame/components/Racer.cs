@@ -25,6 +25,9 @@ class Racer
     public bool Braking;
     public Vector2? LastLeftWheel, LastRightWheel; // for skid marks
 
+    // 3D look only: wheel rotation and body lean on its springs
+    float wheelSpin, roll, pitch;
+
     public Racer(string name, Car car, Color color, bool isPlayer)
     {
         Name = name;
@@ -89,22 +92,44 @@ class Racer
         return (rear - r * 9, rear + r * 9);
     }
 
-    public void Draw()
+    public void UpdateVisuals(DriverInput input, float dt)
     {
-        DrawCar(Movement.Position, Movement.Heading, Color, 1f, LastSteer, Car.Type, Braking);
+        float speed = Movement.ForwardSpeed;
+        wheelSpin += speed * dt / Scene3D.WheelRadiusUnits(Car.Type);
+        wheelSpin %= MathF.Tau;
+
+        // Lean out of corners, dip the nose under braking, squat when accelerating
+        float speedRatio = Math.Clamp(MathF.Abs(speed) / (Car.MaxSpeed * Movement.PixelsPerKmh), 0, 1);
+        float rollTarget = -input.Steer * speedRatio * 0.07f;
+        float pitchTarget = Braking ? -0.035f : input.Throttle > 0 && speedRatio < 0.6f ? 0.02f : 0;
+        float k = 1 - MathF.Exp(-6f * dt);
+        roll += (rollTarget - roll) * k;
+        pitch += (pitchTarget - pitch) * k;
     }
 
-    // Floating name tag over AI cars (drawn after all cars so tags never hide under a car)
-    public void DrawNameTag()
+    public void Draw()
     {
-        if (IsPlayer) return;
-        const float size = 11;
-        float w = Ui.MeasureText(Name, size, Typeface.Body) + 14;
-        Vector2 p = Movement.Position + new Vector2(0, -36);
-        Rectangle r = new(p.X - w / 2, p.Y - 9, w, 18);
-        Ui.RoundRect(r, 9, new Color(8, 10, 14, 170));
-        Raylib.DrawRectangleRec(new Rectangle(r.X + 6, r.Y + 5, 2, 8), Color);
-        Ui.DrawText(Name, r.X + 11, r.Y + 3.5f, size, new Color(235, 238, 244, 230), Typeface.Body);
+        Scene3D.DrawCar(Car.Type, new Scene3D.CarPose
+        {
+            Position = Movement.Position,
+            Heading = Movement.Heading,
+            Steer = LastSteer,
+            WheelSpin = wheelSpin,
+            Roll = roll,
+            Pitch = pitch,
+            Braking = Braking,
+        }, Color);
+    }
+
+    // Floating name tag over an AI car, at a point on the screen (pixels)
+    public void DrawNameTag(Vector2 screen, float scale, float alpha)
+    {
+        float size = 11 * scale;
+        float w = Ui.MeasureText(Name, size, Typeface.Body) + 14 * scale;
+        Rectangle r = new(screen.X - w / 2, screen.Y - 9 * scale, w, 18 * scale);
+        Ui.RoundRect(r, 9 * scale, new Color(8, 10, 14, (int)(170 * alpha)));
+        Raylib.DrawRectangleRec(new Rectangle(r.X + 6 * scale, r.Y + 5 * scale, 2 * scale, 8 * scale), Ui.Alpha(Color, alpha));
+        Ui.DrawText(Name, r.X + 11 * scale, r.Y + 3.5f * scale, size, new Color(235, 238, 244, (int)(230 * alpha)), Typeface.Body);
     }
 
     // Body proportions per class (length, width, cabin length, cabin offset, spoiler)
@@ -116,7 +141,7 @@ class Racer
         _ => (40f, 21f, 12f, 0f, true, 7f), // hypercar: long, wide, tiny canopy
     };
 
-    // Draws a top-down car. Also used for the showroom in the menu (scale > 1).
+    // Draws a flat top-down car icon (used for the car picker tabs on the menu).
     public static void DrawCar(Vector2 pos, float heading, Color color, float scale, float steer, CarType type = CarType.SportsCar, bool braking = false)
     {
         float deg = heading * 180f / MathF.PI;

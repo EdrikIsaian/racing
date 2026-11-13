@@ -13,8 +13,12 @@ CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
 Raylib.SetConfigFlags(ConfigFlags.Msaa4xHint | ConfigFlags.VSyncHint | ConfigFlags.ResizableWindow | ConfigFlags.HighDpiWindow);
 Raylib.InitWindow(Ui.BaseWidth, Ui.BaseHeight, "Racing Game");
 Raylib.SetExitKey(KeyboardKey.Null); // Esc pauses instead of closing the window
-Raylib.ToggleBorderlessWindowed();   // start full screen
+// RACING_SCREENSHOTS=1: windowed, takes a few screenshots (menu, race) into the working directory, then quits
+bool screenshotRun = Environment.GetEnvironmentVariable("RACING_SCREENSHOTS") == "1";
+if (!screenshotRun) Raylib.ToggleBorderlessWindowed(); // start full screen
 Ui.LoadFont();
+Scene3D.Load();
+Rlgl.SetClipPlanes(2, 15000); // world units are small (a car is ~40 long), the circuit is ~4000 across
 
 // VSync paces the frames. The FPS cap is only a safety net (e.g. when the window is hidden and
 // VSync stops working), so keep it well above the refresh rate: a cap equal to the refresh rate
@@ -27,6 +31,7 @@ static void UpdateFpsCap()
 UpdateFpsCap();
 
 Game game = new Game();
+int frame = 0;
 
 while (!Raylib.WindowShouldClose() && !game.QuitRequested)
 {
@@ -43,12 +48,23 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
     float dt = MathF.Min(Raylib.GetFrameTime(), 1f / 30f);
     game.Update(dt);
 
+    game.PreDraw();       // off-screen 3D renders (menu showroom)
     Supersample.Begin(); // smoother edges on non-Retina screens
     game.Draw();
     PerfOverlay.Draw();
+    if (screenshotRun)
+    {
+        frame++;
+        if (frame == 60) Supersample.CaptureTo = "shot_menu.png";
+        if (frame == 61) game.StartRaceNow();
+        if (frame == 150) Supersample.CaptureTo = "shot_grid.png";
+        if (frame == 480) Supersample.CaptureTo = "shot_race.png";
+        if (frame == 482) break;
+    }
     Supersample.End();
 }
 
 Supersample.Unload();
+Scene3D.Unload();
 Ui.UnloadFont();
 Raylib.CloseWindow();
