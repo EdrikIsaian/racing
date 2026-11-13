@@ -24,6 +24,7 @@ class Game
         new Car("Skoda", "Octavia", CarType.Sedan, 45, 240, 0.70f, new Color(78, 169, 50, 255)),
         new Car("Porsche", "911 GT3", CarType.SportsCar, 70, 318, 0.95f, new Color(250, 210, 30, 255)),
         new Car("Ferrari", "LaFerrari", CarType.HyperCar, 85, 350, 0.82f, new Color(210, 30, 30, 255)),
+        new Car("Meme Motors", "Big Head", CarType.HeadCar, 62, 300, 0.78f, new Color(214, 120, 62, 255)),
     };
     int selectedCar;
     int laps = 3;
@@ -86,6 +87,7 @@ class Game
     }
 
     public void StartRaceNow() => StartRace();
+    public void PickCar(int i) => selectedCar = Math.Clamp(i, 0, cars.Count - 1);
 
     void StartRace()
     {
@@ -234,6 +236,7 @@ class Game
         CarType.SUV => "SUV",
         CarType.Sedan => "Sport sedan",
         CarType.SportsCar => "Sports car",
+        CarType.HeadCar => "Head car",
         _ => "Hypercar",
     };
 
@@ -291,7 +294,7 @@ class Game
 
         foreach (Button b in menuButtons) b.Draw();
 
-        Ui.KeyHints(640, 684, new[] { ("A  D", "Choose car"), ("ENTER", "Start race"), ("M", Audio.MusicMuted ? "Music off" : "Music on"), ("F", "Full screen"), ("ESC", "Quit") });
+        Ui.KeyHints(640, 684, new[] { ("A  D", "Choose car"), ("ENTER", "Start race"), ("M", Audio.MusicMuted ? "Music off" : "Music on"), ("T", RayTracing.Enabled ? "Ray tracing on" : "Ray tracing off"), ("F", "Full screen"), ("ESC", "Quit") });
         Ui.End();
     }
 
@@ -308,8 +311,22 @@ class Game
 
         Color text = selected ? Ui.TextColor : Ui.Muted;
         Ui.DrawText($"0{i + 1}", r.X + 16, r.Y + 13, 12, selected ? Ui.Accent : Ui.Dim, Typeface.Bold);
-        Ui.DrawText(car.Model.ToUpperInvariant(), r.X + 16, r.Y + 29, 22, text, Typeface.Display, 0.03f);
-        Racer.DrawCar(new Vector2(r.X + r.Width - 34, r.Y + r.Height / 2), -MathF.PI / 2, selected ? car.Color : Ui.Alpha(Darken(car.Color), 1f), 1.05f, 0, car.Type);
+        // Name shrinks to fit next to the icon (five tabs are narrow)
+        string name = car.Model.ToUpperInvariant();
+        float room = r.Width - 16 - 58, size = 22;
+        float nameW = Ui.MeasureText(name, size, Typeface.Display, 0.03f);
+        if (nameW > room) size = MathF.Max(13, size * room / nameW);
+        Ui.DrawText(name, r.X + 16, r.Y + 29 + (22 - size) * 0.7f, size, text, Typeface.Display, 0.03f);
+        if (car.Type == CarType.HeadCar)
+        {
+            // The photo itself, small, as its icon
+            Rectangle src = HeadCar.PhotoArea;
+            float h = 23, w = h * src.Width / src.Height;
+            Rectangle dst = new(r.X + r.Width - 34 - w / 2, r.Y + r.Height / 2 - h / 2, w, h);
+            Raylib.DrawTexturePro(HeadCar.Icon, src, dst, Vector2.Zero, 0, selected ? Color.White : new Color(150, 150, 150, 255));
+        }
+        else
+            Racer.DrawCar(new Vector2(r.X + r.Width - 34, r.Y + r.Height / 2), -MathF.PI / 2, selected ? car.Color : Ui.Alpha(Darken(car.Color), 1f), 1.05f, 0, car.Type);
     }
 
     static Color Darken(Color c) => new((int)(c.R * 0.55f), (int)(c.G * 0.55f), (int)(c.B * 0.55f), 255);

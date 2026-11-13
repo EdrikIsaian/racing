@@ -5,7 +5,8 @@ enum CarType
     SUV,
     Sedan,
     SportsCar,
-    HyperCar
+    HyperCar,
+    HeadCar
 }
 
 // The "spec sheet" of a car. Several racers can share the same Car.

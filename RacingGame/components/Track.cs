@@ -191,9 +191,13 @@ class Track
         for (int y = y0; y <= y1; y += 2)
             Scene3D.Quad(new(x0 * band, y * band), new(x1 * band, y * band), new(x1 * band, (y + 1) * band), new(x0 * band, (y + 1) * band), stripe);
 
-        // Tree shadows
-        foreach (var (pos, size, _) in trees)
+        // Tree shadows (painted blobs only for trees the ray tracer isn't handling)
+        for (int i = 0; i < trees.Count; i++)
+        {
+            var (pos, size, _) = trees[i];
+            if (RayTracing.Enabled && traced[i]) continue;
             Scene3D.Disc(pos + new Vector2(Scene3D.SunDir.X, Scene3D.SunDir.Z) * size * 1.2f, size * 1.25f, size * 1.0f, new Vector2(1, 0), new Color(0, 0, 0, 52), 14);
+        }
 
         // Layers from the outside in: darker grass verge, kerb-side shoulder, asphalt, rubbered line
         Band(Width + 90, new Color(58, 102, 52, 255));
@@ -223,6 +227,37 @@ class Track
 
         DrawGridBoxes();
         DrawStartLine();
+    }
+
+    float[] treeDist = Array.Empty<float>();
+    int[] treeOrder = Array.Empty<int>();
+    bool[] traced = Array.Empty<bool>();
+
+    // Puts the gantry and the trees nearest to what the camera looks at into the ray-traced scene
+    public void AddRayCasters(Vector3 cameraPos, Vector3 cameraForward)
+    {
+        RayTracing.AddGantry(Points[0] + DirectionAt(0) * 14, HeadingAt(0));
+        if (traced.Length != trees.Count)
+        {
+            treeDist = new float[trees.Count];
+            treeOrder = new int[trees.Count];
+            traced = new bool[trees.Count];
+        }
+        Vector2 fwd = Vector2.Normalize(new Vector2(cameraForward.X, cameraForward.Z));
+        Vector2 focus = new Vector2(cameraPos.X, cameraPos.Z) + fwd * 700;
+        for (int i = 0; i < trees.Count; i++)
+        {
+            treeDist[i] = Vector2.DistanceSquared(trees[i].Pos, focus);
+            treeOrder[i] = i;
+            traced[i] = false;
+        }
+        Array.Sort(treeDist, treeOrder);
+        for (int k = 0; k < trees.Count && !RayTracing.TreesFull; k++)
+        {
+            int i = treeOrder[k];
+            RayTracing.AddTree(trees[i].Pos, trees[i].Size, i);
+            traced[i] = true;
+        }
     }
 
     // Trees and the start gantry. Skips trees behind the camera or lost in the fog.

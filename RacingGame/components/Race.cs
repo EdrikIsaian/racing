@@ -299,10 +299,17 @@ class Race
         Raylib.BeginMode3D(camera);
         Scene3D.SetView(camera.Position, Scene3D.FogStart, Scene3D.FogEnd, Scene3D.Horizon);
 
+        // Shapes the ray tracer casts shadows and reflections from
+        RayTracing.Begin(new Color(62, 64, 70, 255));
+        foreach (Racer r in Racers) RayTracing.AddCar(r.Car.Type, r.Movement.Position, r.Movement.Heading, r.Color);
+        Track.AddRayCasters(camera.Position, camera.Target - camera.Position);
+        RayTracing.Upload();
+
         Scene3D.BeginGround();
         Track.DrawGround();
         skidMarks.Draw();
         foreach (Racer r in Racers) Scene3D.CarShadow(r.Movement.Position, r.Movement.Heading, r.Car.Type);
+        Scene3D.RayShadows(new Vector2(camera.Position.X, camera.Position.Z), Scene3D.FogEnd + 500);
         Scene3D.EndGround();
 
         Track.DrawScenery(camera.Position, camera.Target - camera.Position);

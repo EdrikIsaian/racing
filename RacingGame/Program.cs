@@ -16,6 +16,7 @@ Raylib.SetExitKey(KeyboardKey.Null); // Esc pauses instead of closing the window
 // RACING_SCREENSHOTS=1: windowed, takes a few screenshots (menu, race) into the working directory, then quits
 bool screenshotRun = Environment.GetEnvironmentVariable("RACING_SCREENSHOTS") == "1";
 if (!screenshotRun) Raylib.ToggleBorderlessWindowed(); // start full screen
+if (Environment.GetEnvironmentVariable("RACING_RT") == "0") RayTracing.Enabled = false; // start with ray tracing off
 Ui.LoadFont();
 Scene3D.Load();
 Audio.Init();
@@ -32,6 +33,7 @@ static void UpdateFpsCap()
 UpdateFpsCap();
 
 Game game = new Game();
+if (int.TryParse(Environment.GetEnvironmentVariable("RACING_CAR"), out int carNo)) game.PickCar(carNo - 1); // RACING_CAR=5: start on car 5
 int frame = 0;
 
 while (!Raylib.WindowShouldClose() && !game.QuitRequested)
@@ -44,6 +46,7 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
     }
     if (Raylib.IsKeyPressed(KeyboardKey.F3)) PerfOverlay.Toggle();
     if (Raylib.IsKeyPressed(KeyboardKey.M)) Audio.MusicMuted = !Audio.MusicMuted;
+    if (Raylib.IsKeyPressed(KeyboardKey.T)) RayTracing.Enabled = !RayTracing.Enabled;
     PerfOverlay.Record(Raylib.GetFrameTime());
 
     // Time since last frame, capped so a hiccup doesn't teleport the cars

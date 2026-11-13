@@ -21,8 +21,8 @@ static unsafe class Scene3D
 
     static readonly Dictionary<CarType, CarModels> cars = new();
     static Model wheel, pine, round, gantry, platform;
-    static Shader lit, ground;
-    static int litViewPos, litFog, litFogColor, groundViewPos, groundFog, groundFogColor;
+    static Shader lit, ground, rtShadow;
+    static int litViewPos, litFog, litFogColor, litReflect, groundViewPos, groundFog, groundFogColor, rtViewPos, rtFog;
     static bool loaded;
 
     public static Vector3 W(Vector2 p, float height = 0) => new(p.X, height, p.Y);
@@ -33,6 +33,13 @@ static unsafe class Scene3D
     {
         lit = Raylib.LoadShaderFromMemory(LitVs, LitFs);
         ground = Raylib.LoadShaderFromMemory(GroundVs, GroundFs);
+        rtShadow = Raylib.LoadShaderFromMemory(GroundVs, RayTracing.ShadowFs);
+        litReflect = Raylib.GetShaderLocation(lit, "reflectivity");
+        rtViewPos = Raylib.GetShaderLocation(rtShadow, "viewPos");
+        rtFog = Raylib.GetShaderLocation(rtShadow, "fogRange");
+        Raylib.SetShaderValue(rtShadow, Raylib.GetShaderLocation(rtShadow, "sunDir"), SunDir, ShaderUniformDataType.Vec3);
+        RayTracing.Bind(lit);
+        RayTracing.Bind(rtShadow);
         litViewPos = Raylib.GetShaderLocation(lit, "viewPos");
         litFog = Raylib.GetShaderLocation(lit, "fogRange");
         litFogColor = Raylib.GetShaderLocation(lit, "fogColor");
@@ -51,6 +58,9 @@ static unsafe class Scene3D
                 LoadLit(dir, $"car_{key}_paint.glb"), LoadLit(dir, $"car_{key}_detail.glb"), LoadLit(dir, $"car_{key}_tail.glb"),
                 F("wheelRadius"), F("wheelWidth"), F("wheelbase"), F("track"), F("length"), F("width"));
         }
+        Model head = HeadCar.Build(dir);
+        UseLitShader(ref head);
+        cars[CarType.HeadCar] = new CarModels(head, default, default, HeadCar.WheelRadius, 0.30f, HeadCar.Wheelbase, 1.72f, HeadCar.Length, HeadCar.Width);
         wheel = LoadLit(dir, "wheel.glb");
         pine = LoadLit(dir, "tree_pine.glb");
         round = LoadLit(dir, "tree_round.glb");
@@ -79,9 +89,10 @@ static unsafe class Scene3D
         foreach (var c in cars.Values)
         {
             Raylib.UnloadModel(c.Paint);
-            Raylib.UnloadModel(c.Detail);
-            Raylib.UnloadModel(c.Tail);
+            if (c.Detail.MeshCount > 0) Raylib.UnloadModel(c.Detail);
+            if (c.Tail.MeshCount > 0) Raylib.UnloadModel(c.Tail);
         }
+        HeadCar.Unload();
         Raylib.UnloadModel(wheel);
         Raylib.UnloadModel(pine);
         Raylib.UnloadModel(round);
@@ -89,6 +100,8 @@ static unsafe class Scene3D
         Raylib.UnloadModel(platform);
         Raylib.UnloadShader(lit);
         Raylib.UnloadShader(ground);
+        Raylib.UnloadShader(rtShadow);
+        RayTracing.Unbind();
         Showcase.Unload();
     }
 
@@ -103,6 +116,23 @@ static unsafe class Scene3D
         Raylib.SetShaderValue(ground, groundViewPos, cameraPos, ShaderUniformDataType.Vec3);
         Raylib.SetShaderValue(ground, groundFog, range, ShaderUniformDataType.Vec2);
         Raylib.SetShaderValue(ground, groundFogColor, fc, ShaderUniformDataType.Vec3);
+        Raylib.SetShaderValue(rtShadow, rtViewPos, cameraPos, ShaderUniformDataType.Vec3);
+        Raylib.SetShaderValue(rtShadow, rtFog, range, ShaderUniformDataType.Vec2);
+    }
+
+    // How mirror-like the next models are (ray-traced reflections; 0 = matte)
+    static void Reflect(float amount) => Raylib.SetShaderValue(lit, litReflect, amount, ShaderUniformDataType.Float);
+
+    // Ray-traced sun shadows on the ground, inside the ground pass after everything flat is drawn.
+    // Covers a disc around `centre`; the scene must have been sent with RayTracing.Upload.
+    public static void RayShadows(Vector2 centre, float radius)
+    {
+        if (!RayTracing.Enabled) return;
+        Rlgl.DrawRenderBatchActive();
+        Raylib.BeginShaderMode(rtShadow);
+        Disc(centre, radius, radius, new Vector2(1, 0), Color.Black, 48);
+        Rlgl.DrawRenderBatchActive();
+        Raylib.BeginShaderMode(ground);
     }
 
     // ---------------------------------------------------------------- ground pass
@@ -162,13 +192,20 @@ static unsafe class Scene3D
 
     static void V(Vector2 p, float y) => Rlgl.Vertex3f(p.X, y, p.Y);
 
-    // Soft blob shadow under a car, nudged away from the sun
+    // Soft blob shadow under a car, nudged away from the sun.
+    // With ray tracing the sun shadow is traced, so only the dark contact patch under the car stays.
     public static void CarShadow(Vector2 pos, float heading, CarType type, float scale = 1)
     {
         CarModels m = cars[type];
         Vector2 f = new(MathF.Cos(heading), MathF.Sin(heading));
-        Vector2 c = pos + new Vector2(SunDir.X, SunDir.Z) * 6f * scale;
         float L = m.Length * UnitsPerMetre * scale, Wd = m.Width * UnitsPerMetre * scale;
+        if (RayTracing.Enabled)
+        {
+            Box(pos, f, L + 3 * scale, Wd + 3 * scale, new Color(0, 0, 0, 30));
+            Box(pos, f, L - 4 * scale, Wd - 3 * scale, new Color(0, 0, 0, 40));
+            return;
+        }
+        Vector2 c = pos + new Vector2(SunDir.X, SunDir.Z) * 6f * scale;
         Box(c, f, L + 8 * scale, Wd + 7 * scale, new Color(0, 0, 0, 34));
         Box(c, f, L + 2 * scale, Wd + 1 * scale, new Color(0, 0, 0, 60));
     }
@@ -203,9 +240,22 @@ static unsafe class Scene3D
 
         Model paint = m.Paint, detail = m.Detail, tail = m.Tail;
         paint.Transform = detail.Transform = tail.Transform = lean;
-        Raylib.DrawModelEx(paint, pos, up, yaw, scl, color);
-        Raylib.DrawModelEx(detail, pos, up, yaw, scl, Color.White);
-        Raylib.DrawModelEx(tail, pos, up, yaw, scl, pose.Braking ? new Color(255, 40, 36, 255) : new Color(120, 16, 22, 255));
+        if (type == CarType.HeadCar)
+        {
+            // The photo is the paint job: skin keeps its own colour, with a faint sheen
+            Reflect(0.08f);
+            Raylib.DrawModelEx(paint, pos, up, yaw, scl, Color.White);
+        }
+        else
+        {
+            Reflect(1.0f);
+            Raylib.DrawModelEx(paint, pos, up, yaw, scl, color);
+            Reflect(0.7f); // glass, trim and chrome
+            Raylib.DrawModelEx(detail, pos, up, yaw, scl, Color.White);
+            Reflect(0.4f);
+            Raylib.DrawModelEx(tail, pos, up, yaw, scl, pose.Braking ? new Color(255, 40, 36, 255) : new Color(120, 16, 22, 255));
+        }
+        Reflect(0.15f);
 
         // Wheels: front pair steers, all spin with distance travelled
         Vector2 f = new(MathF.Cos(pose.Heading), MathF.Sin(pose.Heading));
@@ -228,55 +278,74 @@ static unsafe class Scene3D
         Model m = variant % 2 == 0 ? pine : round;
         float s = size / 26f * UnitsPerMetre;
         byte k = (byte)Math.Clamp(255 * shade, 0, 255);
+        Reflect(0);
         Raylib.DrawModelEx(m, W(pos), Vector3.UnitY, variant * 47 % 360, new Vector3(s, s, s), new Color(k, k, k, (byte)255));
     }
 
     public static void DrawGantry(Vector2 pos, float heading)
     {
         float s = UnitsPerMetre;
+        Reflect(0.25f);
         Raylib.DrawModelEx(gantry, W(pos), Vector3.UnitY, -heading * 180f / MathF.PI, new Vector3(s, s, s), Color.White);
     }
 
-    public static void DrawPlatform(Vector3 pos, float radius, float height, Color color) =>
+    public static void DrawPlatform(Vector3 pos, float radius, float height, Color color)
+    {
+        Reflect(0);
         Raylib.DrawModelEx(platform, pos, Vector3.UnitY, 0, new Vector3(radius, height, radius), color);
+    }
 
     // ---------------------------------------------------------------- shaders
 
     const string LitVs = @"#version 330
 in vec3 vertexPosition;
 in vec3 vertexNormal;
+in vec2 vertexTexCoord;
 uniform mat4 mvp;
 uniform mat4 matModel;
 uniform mat4 matNormal;
 out vec3 fragPos;
 out vec3 fragNormal;
+out vec2 fragTexCoord;
 void main() {
+    fragTexCoord = vertexTexCoord;
     fragPos = vec3(matModel * vec4(vertexPosition, 1.0));
     fragNormal = normalize(vec3(matNormal * vec4(vertexNormal, 0.0)));
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 }";
 
-    // Sun + sky/ground ambient, a little specular and a cool rim light, then distance fog
+    // Sun (with ray-traced soft shadows) + sky/ground ambient, a little specular and a cool rim light,
+    // ray-traced reflections weighted by Fresnel, then distance fog
     const string LitFs = @"#version 330
 in vec3 fragPos;
 in vec3 fragNormal;
+in vec2 fragTexCoord;
+uniform sampler2D texture0; // 1x1 white for the untextured Blender models
 uniform vec4 colDiffuse;
 uniform vec3 sunDir;
 uniform vec3 viewPos;
 uniform vec3 fogColor;
 uniform vec2 fogRange;
+uniform float reflectivity;
+" + RayTracing.Glsl + RayTracing.ReflectGlsl + @"
 out vec4 finalColor;
 void main() {
     vec3 n = normalize(fragNormal);
     vec3 l = -sunDir;
     vec3 v = normalize(viewPos - fragPos);
     float diff = max(dot(n, l), 0.0);
+    if (rtOn == 1 && diff > 0.0) diff *= 1.0 - rtShadow(fragPos, n);
     float hemi = 0.5 + 0.5 * n.y;
     vec3 ambient = mix(vec3(0.26, 0.27, 0.24), vec3(0.50, 0.56, 0.66), hemi);
-    vec3 col = colDiffuse.rgb * (ambient + vec3(1.0, 0.95, 0.86) * diff * 0.80);
+    vec3 albedo = colDiffuse.rgb * texture(texture0, fragTexCoord).rgb;
+    vec3 col = albedo * (ambient + vec3(1.0, 0.95, 0.86) * diff * 0.80);
     vec3 h = normalize(l + v);
     col += pow(max(dot(n, h), 0.0), 48.0) * 0.30 * diff;
     col += pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.10 * vec3(0.75, 0.85, 1.0);
+    if (rtOn == 1 && reflectivity > 0.0) {
+        float fresnel = 0.12 + 0.88 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+        col = mix(col, rtReflection(fragPos + n * 0.06, reflect(-v, n)), reflectivity * fresnel);
+    }
     float f = clamp((length(viewPos - fragPos) - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
     finalColor = vec4(mix(col, fogColor, f), colDiffuse.a);
 }";
@@ -332,6 +401,9 @@ static class Showcase
         Raylib.ClearBackground(new Color(0, 0, 0, 0));
         Raylib.BeginMode3D(cam);
         Scene3D.SetView(cam.Position, 1e6f, 2e6f, Scene3D.Horizon);
+        RayTracing.Begin(new Color(70, 76, 92, 255)); // turntable top, as seen lit
+        RayTracing.AddCar(type, Vector2.Zero, spin, color, scale);
+        RayTracing.Upload();
 
         // Turntable
         Scene3D.DrawPlatform(new Vector3(0, -0.12f * u, 0), 3.15f * u, 0.12f * u, new Color(40, 44, 54, 255));

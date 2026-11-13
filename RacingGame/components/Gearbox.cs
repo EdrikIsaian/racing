@@ -94,6 +94,7 @@ record EngineSpec(int Gears, float IdleRpm, float RedlineRpm, int Cylinders, flo
         CarType.SUV => new EngineSpec(6, 750, 6400, 6, 0.55f),
         CarType.Sedan => new EngineSpec(6, 800, 6600, 4, 0.40f),
         CarType.SportsCar => new EngineSpec(7, 900, 9000, 6, 0.80f),
+        CarType.HeadCar => new EngineSpec(5, 650, 6200, 8, 1.00f), // big lazy V8
         _ => new EngineSpec(7, 1000, 9250, 12, 0.70f),
     };
 }
