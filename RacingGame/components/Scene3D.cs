@@ -21,6 +21,12 @@ static unsafe class Scene3D
     record struct CarModels(Model Paint, Model Detail, Model Tail, float WheelRadius, float WheelWidth, float Wheelbase, float Track, float Length, float Width);
 
     static readonly Dictionary<CarType, CarModels> cars = new();
+
+    // Overall shape of a Blender-built car in metres (x forward from the axle midpoint, up from the ground)
+    public record struct CarShape(float Length, float Width, float Centre, float Clearance, float Belt, float Roof,
+        float RoofX0, float RoofX1, float RoofHalfWidth, float WingHeight, float WingChord, float WingX, float WingSpan);
+    static readonly Dictionary<CarType, CarShape> shapes = new();
+    public static CarShape Shape(CarType type) => shapes[type];
     static Model wheel, pine, round, gantry, platform;
     public static Model Cube, Cylinder, Sphere, Rock, Cone; // unit shapes for procedural scenery
     static Shader lit, ground, rtShadow;
@@ -68,6 +74,8 @@ static unsafe class Scene3D
             cars[type] = new CarModels(
                 LoadLit(dir, $"car_{key}_paint.glb"), LoadLit(dir, $"car_{key}_detail.glb"), LoadLit(dir, $"car_{key}_tail.glb"),
                 F("wheelRadius"), F("wheelWidth"), F("wheelbase"), F("track"), F("length"), F("width"));
+            shapes[type] = new CarShape(F("length"), F("width"), F("centre"), F("clearance"), F("belt"), F("roof"),
+                F("roofX0"), F("roofX1"), F("roofHalfWidth"), F("wingHeight"), F("wingChord"), F("wingX"), F("wingSpan"));
         }
         Model head = HeadCar.Build(dir);
         UseLitShader(ref head);
@@ -444,9 +452,20 @@ void main() {
     vec3 h = normalize(l + v);
     col += pow(max(dot(n, h), 0.0), 48.0) * 0.30 * diff;
     col += pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.10 * vec3(0.75, 0.85, 1.0);
-    if (rtOn == 1 && reflectivity > 0.0) {
+    // clear coat: a tight bright glint on top of the broad highlight
+    col += pow(max(dot(n, h), 0.0), 260.0) * 0.9 * reflectivity * diff * vec3(1.0, 0.97, 0.9);
+    if (reflectivity > 0.0) {
         float fresnel = 0.12 + 0.88 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
-        col = mix(col, rtReflection(fragPos + n * 0.06, reflect(-v, n)), reflectivity * fresnel);
+        vec3 r = reflect(-v, n);
+        vec3 env;
+        if (rtOn == 1) env = rtReflection(fragPos + n * 0.06, r);
+        else {
+            // no ray tracing: sky above the horizon, dim ground below, with a soft horizon line
+            vec3 sky = rtSky(r);
+            vec3 below = mix(vec3(0.20, 0.21, 0.19), rtSky(vec3(r.x, 0.0, r.z)) * 0.8, exp(r.y * 10.0));
+            env = r.y >= 0.0 ? sky : below;
+        }
+        col = mix(col, env, reflectivity * fresnel);
     }
     col *= tint;
     float f = clamp((length(viewPos - fragPos) - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);

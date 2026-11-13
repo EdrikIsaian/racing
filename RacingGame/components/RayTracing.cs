@@ -30,17 +30,7 @@ static class RayTracing
     record struct Bound(Shader Shader, int On, int BoxCount, int BoxA, int BoxB, int BoxC, int TreeCount, int Trees, int TreeY, int Ground, int GroundY);
     static readonly List<Bound> shaders = new();
 
-    // Proxy sizes in metres, from CARS in blender/build_models.py
-    record struct CarProxy(float L, float W, float Clearance, float Top, float CabX0, float CabX1, float Roof, float Rake, float Taper, float WingHeight, float WingChord);
-    static readonly Dictionary<CarType, CarProxy> proxies = new()
-    {
-        [CarType.SUV] = new(4.60f, 1.95f, 0.24f, 1.00f, -1.55f, 0.95f, 1.66f, 0.40f, 0.10f, 0, 0),
-        [CarType.Sedan] = new(4.70f, 1.84f, 0.15f, 0.80f, -1.30f, 0.85f, 1.42f, 0.60f, 0.14f, 0, 0),
-        [CarType.SportsCar] = new(4.50f, 1.88f, 0.11f, 0.74f, -1.05f, 0.55f, 1.28f, 0.70f, 0.17f, 0.95f, 0.30f),
-        [CarType.HyperCar] = new(4.75f, 2.00f, 0.09f, 0.70f, -0.80f, 0.70f, 1.13f, 0.80f, 0.22f, 1.10f, 0.38f),
-    };
-
-    static readonly Color Glass = new(28, 36, 50, 255), Trim = new(22, 22, 26, 255), Steel = new(70, 74, 82, 255), Banner = new(18, 20, 26, 255);
+    static readonly Color Glass = new(16, 22, 30, 255), Trim = new(22, 22, 26, 255), Steel = new(70, 74, 82, 255), Banner = new(18, 20, 26, 255);
 
     // ---------------------------------------------------------------- scene building (once per frame, per camera)
 
@@ -98,18 +88,14 @@ static class RayTracing
             foreach (var (centre, half, colour) in BurgerCar.Proxy) AddModelBox(pos, yaw, s, centre, half, colour, y);
             return;
         }
-        CarProxy p = proxies[type];
-        // Lower body (starts at the ground clearance so the ground under the car is outside it)
-        AddModelBox(pos, yaw, s, new(0, (p.Clearance + p.Top - 0.03f) / 2, 0), new(p.L / 2, (p.Top - 0.03f - p.Clearance) / 2, p.W / 2), paint, y);
-        // Cabin: the roof's footprint, which sits inside the sloped glass
-        float x0 = p.CabX0 + p.Rake * 0.45f, x1 = p.CabX1 - p.Rake * 0.55f, zBase = p.Top - 0.08f;
-        float halfW = p.W / 2 - 0.12f - p.Taper;
-        AddModelBox(pos, yaw, s, new((x0 + x1) / 2, (zBase + p.Roof) / 2, 0), new((x1 - x0) / 2, (p.Roof - zBase) / 2, halfW), Glass, y);
+        // Boxes sized from cars.json (written by blender/build_models.py)
+        Scene3D.CarShape p = Scene3D.Shape(type);
+        // Lower body up to the beltline (starts at the ground clearance so the ground under the car is outside it)
+        AddModelBox(pos, yaw, s, new(p.Centre, (p.Clearance + p.Belt) / 2, 0), new(p.Length / 2, (p.Belt - p.Clearance) / 2, p.Width / 2), paint, y);
+        // Cabin: the roof's footprint, from the beltline up
+        AddModelBox(pos, yaw, s, new((p.RoofX0 + p.RoofX1) / 2, (p.Belt + p.Roof) / 2, 0), new((p.RoofX1 - p.RoofX0) / 2, (p.Roof - p.Belt) / 2, p.RoofHalfWidth), Glass, y);
         if (p.WingHeight > 0)
-        {
-            float span = type == CarType.HyperCar ? p.W - 0.06f : p.W - 0.2f;
-            AddModelBox(pos, yaw, s, new(-p.L / 2 + 0.25f, p.WingHeight, 0), new(p.WingChord / 2, 0.03f, span / 2), Trim, y);
-        }
+            AddModelBox(pos, yaw, s, new(p.WingX, p.WingHeight, 0), new(p.WingChord / 2, 0.03f, p.WingSpan / 2), Trim, y);
     }
 
     // Matches build_gantry() in blender/build_models.py
