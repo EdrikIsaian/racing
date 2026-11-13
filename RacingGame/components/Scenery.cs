@@ -3,7 +3,7 @@ using Raylib_cs;
 
 // Everything that makes a circuit feel lived in: a grandstand with a crowd that jumps when you
 // pass, flags flapping in the wind, birds circling, hot-air balloons, wind turbines, rocks,
-// cacti, tumbleweeds rolling across the road and clouds drifting over the sky.
+// cacti and tumbleweeds rolling across the road. (Clouds are part of the sky: Sky.cs.)
 // The layout is fixed per track (seeded); only the motion changes.
 class Scenery
 {
@@ -19,7 +19,6 @@ class Scenery
     readonly List<(Vector2 Centre, float Radius, float Alt, float Phase, Color Color, Color Trim)> balloons = new();
     readonly List<(Vector2 Centre, float Radius, float Alt, int Count, float Speed, float Phase, bool Eagle)> flocks = new();
     readonly List<(Vector2 Pos, float Y, float Phase, Color Color)> flags = new();
-    readonly List<(Vector3 Pos, float Size, Vector3[] Puffs)> clouds = new();
 
     struct Weed { public Vector2 Pos, Vel; public float Size, Spin, Phase; }
     readonly Weed[] weeds;
@@ -138,19 +137,6 @@ class Scenery
 
         for (int i = 0; i < def.Flocks; i++)
             flocks.Add((RandomNearTrack(0), R(300, 800), R(180, 340), rng.Next(5, 10), R(0.08f, 0.14f) * (rng.NextDouble() < 0.5 ? -1 : 1), R(0, MathF.Tau), def.Biome != Biome.Meadow));
-
-        Vector2 mid = (track.BoundsMin + track.BoundsMax) / 2;
-        for (int i = 0; i < 26; i++)
-        {
-            float a = R(0, MathF.Tau), d = R(3500, 9000);
-            var puffs = new Vector3[7];
-            for (int k = 0; k < puffs.Length; k++)
-            {
-                float ox = R(-1.5f, 1.5f);
-                puffs[k] = new Vector3(ox, R(-0.28f, 0.28f), R(0.45f, 0.95f) * (1 - MathF.Abs(ox) * 0.25f));
-            }
-            clouds.Add((new Vector3(mid.X + MathF.Cos(a) * d, R(1700, 2900), mid.Y + MathF.Sin(a) * d), R(260, 620), puffs));
-        }
     }
 
     // ---------------------------------------------------------------- motion
@@ -180,35 +166,6 @@ class Scenery
     }
 
     // ---------------------------------------------------------------- drawing
-
-    // Clouds are painted onto the sky before the 3D scene; hills drawn afterwards cover them
-    public void DrawSky(Camera3D cam)
-    {
-        Vector3 fwd = Vector3.Normalize(cam.Target - cam.Position);
-        float t = (float)Raylib.GetTime();
-        float focal = Raylib.GetScreenHeight() / 2f / MathF.Tan(cam.FovY * MathF.PI / 360f);
-        Color main = def.Cloud;
-        Color under = new((int)(main.R * 0.86f), (int)(main.G * 0.87f), (int)(main.B * 0.9f), 255);
-        foreach (var (basePos, size, puffs) in clouds)
-        {
-            Vector3 p = basePos + new Vector3(Wind.X, 0, Wind.Y) * (t * 14 % 6000);
-            Vector3 d = p - cam.Position;
-            float dist = d.Length();
-            if (Vector3.Dot(d / dist, fwd) < 0.2f) continue;
-            Vector2 s = Raylib.GetWorldToScreen(p, cam);
-            float r = size / dist * focal;
-            float haze = Math.Clamp((dist - 4000) / 7000, 0, 0.7f);
-            for (int layer = 0; layer < 2; layer++)
-            {
-                Color c = Ui.Lerp(layer == 0 ? under : main, def.Horizon, haze);
-                foreach (Vector3 puff in puffs)
-                {
-                    Vector2 c2 = s + new Vector2(puff.X, puff.Y - (layer == 1 ? 0.12f : 0)) * r;
-                    Raylib.DrawCircleV(c2, puff.Z * r * (layer == 0 ? 1 : 0.9f), Ui.Alpha(c, layer == 0 ? 0.75f : 0.9f));
-                }
-            }
-        }
-    }
 
     // Models (lit shader): rocks, cacti, turbines, balloons, tumbleweeds
     public void DrawModels(Vector3 cameraPos, Vector3 cameraForward)

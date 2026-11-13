@@ -355,8 +355,7 @@ uniform vec3 rtGround;
 uniform float rtGroundY;
 
 vec3 rtSky(vec3 d) {
-    vec3 sky = mix(vec3(0.769, 0.839, 0.894), vec3(0.361, 0.580, 0.839), smoothstep(0.0, 0.55, d.y));
-    return sky + vec3(1.0, 0.95, 0.85) * pow(max(dot(d, -sunDir), 0.0), 900.0) * 3.0;
+    return skyColor(d) + sunColor * pow(max(dot(d, -sunDir), 0.0), 900.0) * 3.0;
 }
 
 // What a mirror ray from ro sees: the nearest car / tree / gantry / ground, lit and shadowed, or the sky
@@ -385,11 +384,10 @@ vec3 rtReflection(vec3 ro, vec3 rd) {
     vec3 col;
     if (ground) col = alb * (diff > 0.0 ? 1.0 : 0.6); // the ground is drawn unlit, only darkened by shadows
     else {
-        vec3 amb = mix(vec3(0.26, 0.27, 0.24), vec3(0.50, 0.56, 0.66), 0.5 + 0.5 * nrm.y);
-        col = alb * (amb + vec3(1.0, 0.95, 0.86) * diff * 0.80);
+        vec3 amb = mix(vec3(0.27, 0.26, 0.22), mix(skyHorizon, skyZenith, 0.55) * 0.82, 0.5 + 0.5 * nrm.y);
+        col = alb * (amb + sunColor * diff * 0.86);
     }
-    float f = clamp((best - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
-    return mix(col, fogColor, f);
+    return mix(col, fogColor, fogAmount(best));
 }
 ";
 
@@ -400,13 +398,14 @@ in vec3 worldPos;
 uniform vec3 sunDir;
 uniform vec3 viewPos;
 uniform vec2 fogRange;
-" + Glsl + @"
+uniform vec3 fogColor;
+" + Sky.Glsl + Glsl + @"
 out vec4 finalColor;
 void main() {
-    float f = clamp((length(viewPos - worldPos) - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
+    float f = fogAmount(length(viewPos - worldPos));
     if (rtOn == 0 || f >= 1.0) discard;
     float s = rtShadow(worldPos, vec3(0.0, 1.0, 0.0));
     if (s <= 0.0) discard;
-    finalColor = vec4(0.0, 0.0, 0.0, s * 0.40 * (1.0 - f));
+    finalColor = vec4(0.0, 0.0, 0.0, s * 0.46 * (1.0 - f));
 }";
 }

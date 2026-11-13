@@ -13,7 +13,8 @@ static unsafe class Scene3D
     public const float UnitsPerMetre = 8.6f;
 
     // Light comes from the upper left-ish; matches the blob shadows on the ground
-    public static readonly Vector3 SunDir = Vector3.Normalize(new Vector3(0.45f, -1f, 0.32f));
+    // Where the light comes from (set per track by Sky.Apply); also nudges the blob shadows
+    public static Vector3 SunDir = Vector3.Normalize(new Vector3(0.45f, -1f, 0.32f));
     public static readonly Color SkyTop = new(92, 148, 214, 255);
     public static readonly Color Horizon = new(196, 214, 228, 255);
     public static float FogStart = 1800, FogEnd = 6500;
@@ -52,7 +53,10 @@ static unsafe class Scene3D
         litTexSide = Raylib.GetShaderLocation(lit, "texSide");
         rtViewPos = Raylib.GetShaderLocation(rtShadow, "viewPos");
         rtFog = Raylib.GetShaderLocation(rtShadow, "fogRange");
-        Raylib.SetShaderValue(rtShadow, Raylib.GetShaderLocation(rtShadow, "sunDir"), SunDir, ShaderUniformDataType.Vec3);
+        Sky.Load();
+        Sky.Bind(lit);
+        Sky.Bind(ground);
+        Sky.Bind(rtShadow);
         RayTracing.Bind(lit);
         RayTracing.Bind(rtShadow);
         litViewPos = Raylib.GetShaderLocation(lit, "viewPos");
@@ -63,7 +67,6 @@ static unsafe class Scene3D
         groundFogColor = Raylib.GetShaderLocation(ground, "fogColor");
         groundTint = Raylib.GetShaderLocation(ground, "tint");
         litTint = Raylib.GetShaderLocation(lit, "tint");
-        Raylib.SetShaderValue(lit, Raylib.GetShaderLocation(lit, "sunDir"), SunDir, ShaderUniformDataType.Vec3);
 
         string dir = Path.Combine(AppContext.BaseDirectory, "assets", "models");
         using var meta = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir, "cars.json")));
@@ -139,6 +142,7 @@ static unsafe class Scene3D
         Raylib.UnloadShader(ground);
         Raylib.UnloadShader(rtShadow);
         RayTracing.Unbind();
+        Sky.Unload();
         Showcase.Unload();
     }
 
@@ -420,8 +424,9 @@ void main() {
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 }";
 
-    // Sun (with ray-traced soft shadows) + sky/ground ambient, a little specular and a cool rim light,
-    // ray-traced reflections weighted by Fresnel, then distance fog
+    // Physically-based-ish lighting: sun (with ray-traced soft shadows) + sky/ground ambient from the
+    // track's own sky, GGX specular highlights (added as real light, so they can bloom), a clear-coat
+    // glint on paint, ray-traced reflections weighted by Fresnel, then aerial-perspective fog
     const string LitFs = @"#version 330
 in vec3 fragPos;
 in vec3 fragNormal;
@@ -436,40 +441,70 @@ uniform float reflectivity;
 uniform float texBlur;  // head car: blur the side-projected photo where the surface turns away from the side
 uniform vec3 texSide;   // the car's sideways axis
 uniform vec3 tint;      // the track's light colour
-" + RayTracing.Glsl + RayTracing.ReflectGlsl + @"
+" + Sky.Glsl + RayTracing.Glsl + RayTracing.ReflectGlsl + @"
 out vec4 finalColor;
+
+// GGX / Trowbridge-Reitz highlight with Smith shadowing and Schlick Fresnel
+float ggx(vec3 n, vec3 v, vec3 l, float rough, float f0) {
+    vec3 h = normalize(l + v);
+    float nl = max(dot(n, l), 0.0), nv = max(dot(n, v), 1e-3), nh = max(dot(n, h), 0.0);
+    float a = rough * rough, a2 = a * a;
+    float d = nh * nh * (a2 - 1.0) + 1.0;
+    float D = a2 / (3.14159 * d * d);
+    float k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    float G = nl / (nl * (1.0 - k) + k) * nv / (nv * (1.0 - k) + k);
+    float F = f0 + (1.0 - f0) * pow(1.0 - max(dot(h, v), 0.0), 5.0);
+    return D * G * F / (4.0 * nv + 1e-3);
+}
+
 void main() {
     vec3 n = normalize(fragNormal);
-    vec3 l = -sunDir;
     vec3 v = normalize(viewPos - fragPos);
-    float diff = max(dot(n, l), 0.0);
-    if (rtOn == 1 && diff > 0.0) diff *= 1.0 - rtShadow(fragPos, n);
+    // thin parts (wheel spokes, mirror stalks) can face away; light them as if they faced us
+    if (dot(n, v) < -0.2) n = -n;
+    vec3 l = -sunDir;
+    float ndl = max(dot(n, l), 0.0);
+    float shadow = 1.0;
+    if (rtOn == 1 && ndl > 0.0) shadow = 1.0 - rtShadow(fragPos, n);
+    float diff = ndl * shadow;
+
+    // Ambient: the sky's colour from above, warm bounce light from the ground below
     float hemi = 0.5 + 0.5 * n.y;
-    vec3 ambient = mix(vec3(0.26, 0.27, 0.24), vec3(0.50, 0.56, 0.66), hemi);
+    vec3 skyAmb = mix(skyHorizon, skyZenith, 0.55) * 0.82;
+    vec3 groundAmb = vec3(0.27, 0.26, 0.22) * (0.6 + 0.4 * sunColor);
+    vec3 ambient = mix(groundAmb, skyAmb, hemi);
+    // corners and undersides get less sky (cheap ambient occlusion from the normal)
+    ambient *= 0.82 + 0.18 * hemi;
+
     float facing = abs(dot(n, texSide));
     vec3 albedo = colDiffuse.rgb * texture(texture0, fragTexCoord, texBlur * (1.0 - smoothstep(0.1, 0.75, facing))).rgb;
-    vec3 col = albedo * (ambient + vec3(1.0, 0.95, 0.86) * diff * 0.80);
-    vec3 h = normalize(l + v);
-    col += pow(max(dot(n, h), 0.0), 48.0) * 0.30 * diff;
-    col += pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.10 * vec3(0.75, 0.85, 1.0);
-    // clear coat: a tight bright glint on top of the broad highlight
-    col += pow(max(dot(n, h), 0.0), 260.0) * 0.9 * reflectivity * diff * vec3(1.0, 0.97, 0.9);
+    vec3 col = albedo * (ambient + sunColor * diff * 0.86);
+    col += pow(1.0 - max(dot(n, v), 0.0), 3.0) * 0.06 * skyZenith;
+
+    // Highlights in linear light: shiny things (high reflectivity) are smooth, the rest rough
+    float rough = mix(0.62, 0.17, clamp(reflectivity, 0.0, 1.0));
+    float spec = ggx(n, v, l, rough, 0.04) * diff;
+    // clear coat on paint: a second, mirror-smooth layer gives the tiny bright sun glint
+    spec += ggx(n, v, l, 0.045, 0.05) * diff * reflectivity * 0.55;
+    vec3 lin = pow(max(col, 0.0), vec3(2.2)) + pow(sunColor, vec3(2.2)) * spec * 2.2;
+    col = pow(lin, vec3(1.0 / 2.2));
+
     if (reflectivity > 0.0) {
-        float fresnel = 0.12 + 0.88 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+        float fresnel = 0.10 + 0.90 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
         vec3 r = reflect(-v, n);
         vec3 env;
         if (rtOn == 1) env = rtReflection(fragPos + n * 0.06, r);
         else {
             // no ray tracing: sky above the horizon, dim ground below, with a soft horizon line
-            vec3 sky = rtSky(r);
-            vec3 below = mix(vec3(0.20, 0.21, 0.19), rtSky(vec3(r.x, 0.0, r.z)) * 0.8, exp(r.y * 10.0));
-            env = r.y >= 0.0 ? sky : below;
+            vec3 below = mix(vec3(0.20, 0.21, 0.19), skyColor(vec3(r.x, 0.0, r.z)) * 0.8, exp(min(r.y, 0.0) * 10.0));
+            env = r.y >= 0.0 ? rtSky(r) : below;
         }
+        // reflections are dimmer where the surface itself is in shadow from the sky (under the car)
+        env *= 0.75 + 0.25 * hemi;
         col = mix(col, env, reflectivity * fresnel);
     }
     col *= tint;
-    float f = clamp((length(viewPos - fragPos) - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
-    finalColor = vec4(mix(col, fogColor, f), colDiffuse.a);
+    finalColor = vec4(applyFog(col, fragPos), colDiffuse.a);
 }";
 
     // Ground pass: immediate-mode vertices are already in world space
@@ -485,6 +520,9 @@ void main() {
     gl_Position = mvp * vec4(vertexPosition, 1.0);
 }";
 
+    // Flat ground layers (road, kerbs, lines, verges) and flat-coloured 3D bits. Adds fine surface
+    // detail in world space (asphalt grain, wear, patches), a soft sheen of sky and sun on the
+    // tarmac at grazing angles, then fog.
     const string GroundFs = @"#version 330
 in vec4 fragColor;
 in vec3 worldPos;
@@ -492,10 +530,48 @@ uniform vec3 viewPos;
 uniform vec3 fogColor;
 uniform vec2 fogRange;
 uniform vec3 tint;
+uniform vec3 sunDir;
+" + Sky.Glsl + @"
 out vec4 finalColor;
+float hash(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+}
 void main() {
-    float f = clamp((length(viewPos - worldPos) - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
-    finalColor = vec4(mix(fragColor.rgb * tint, fogColor, f), fragColor.a);
+    vec3 base = fragColor.rgb;
+    vec2 p = worldPos.xz + vec2(worldPos.y * 0.7, worldPos.y * 0.3);
+    float dist = length(viewPos - worldPos);
+    // how much fine detail the pixel can show before it would only shimmer
+    float fine = 1.0 - smoothstep(120.0, 700.0, dist);
+    float mid = 1.0 - smoothstep(800.0, 3000.0, dist);
+
+    float lum = dot(base, vec3(0.299, 0.587, 0.114));
+    float sat = max(base.r, max(base.g, base.b)) - min(base.r, min(base.g, base.b));
+    // grey, dark-ish = tarmac; it gets the most texture and the sheen
+    float asphalt = (1.0 - smoothstep(0.04, 0.10, sat)) * (1.0 - smoothstep(0.38, 0.55, lum));
+
+    float big = vnoise(p / 210.0) - 0.5;            // patches of newer / older surface
+    float med = vnoise(p / 31.0) - 0.5;             // wear and stains
+    float mott = vnoise(p / 7.0) - 0.5;             // blotchy binder
+    float grain = (vnoise(p / 2.2) - 0.5) * 0.55 + (vnoise(p / 0.8 + 13.7) - 0.5) * 0.45; // stones in the mix
+    float detail = big * 0.12 * mid + med * 0.10 * mid + mott * (0.04 + 0.08 * asphalt) * mid + grain * (0.04 + 0.12 * asphalt) * fine;
+    base *= 1.0 + detail;
+    // tyre-polished, darker strips (rubbered-in lines) come and go along the road
+    base *= 1.0 - asphalt * 0.06 * vnoise(p / 60.0);
+
+    vec3 col = base * tint;
+    if (asphalt > 0.0 && fragColor.a > 0.99) {
+        vec3 v = normalize(viewPos - worldPos);
+        vec3 r = reflect(-v, vec3(0.0, 1.0, 0.0));
+        float fres = pow(1.0 - max(v.y, 0.0), 5.0);
+        vec3 env = skyColor(r);
+        col = mix(col, env, asphalt * fres * 0.22);
+        float glint = pow(max(dot(r, -sunDir), 0.0), 18.0) * 0.18 + pow(max(dot(r, -sunDir), 0.0), 200.0) * 0.5;
+        col += sunColor * glint * asphalt * (0.5 + 0.5 * fine);
+    }
+    finalColor = vec4(applyFog(col, worldPos), fragColor.a);
 }";
 }
 
@@ -521,6 +597,7 @@ static class Showcase
         var cam = new Camera3D(new Vector3(0, 2.7f * u, 7.4f * u), new Vector3(0, 0.55f * u, 0), Vector3.UnitY, 30, CameraProjection.Perspective);
 
         Scene3D.Ground = null; // the turntable is flat
+        Sky.Apply(Scene3D.SkyTop, Scene3D.Horizon, Sky.SunDirection(40, -140), Sky.DefaultSunColor);
         Raylib.BeginTextureMode(target);
         Raylib.ClearBackground(new Color(0, 0, 0, 0));
         Raylib.BeginMode3D(cam);

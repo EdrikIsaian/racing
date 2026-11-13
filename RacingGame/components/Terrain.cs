@@ -317,7 +317,7 @@ unsafe class Terrain
         locWater = Raylib.GetShaderLocation(shader, "waterColor");
         locStripes = Raylib.GetShaderLocation(shader, "stripes");
         locTint = Raylib.GetShaderLocation(shader, "tint");
-        Raylib.SetShaderValue(shader, Raylib.GetShaderLocation(shader, "sunDir"), Scene3D.SunDir, ShaderUniformDataType.Vec3);
+        Sky.Bind(shader);
         RayTracing.Bind(shader);
     }
 
@@ -410,7 +410,7 @@ uniform vec3 waterColor;
 uniform float stripes;
 uniform float time;
 uniform int mode;
-" + RayTracing.Glsl + @"
+" + Sky.Glsl + RayTracing.Glsl + @"
 out vec4 finalColor;
 float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
 float vnoise(vec2 p) {
@@ -420,7 +420,7 @@ float vnoise(vec2 p) {
 }
 void main() {
     float dist = length(viewPos - worldPos);
-    float fog = clamp((dist - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
+    float fog = fogAmount(dist);
     vec3 col;
     float alpha = 1.0;
     if (mode == 1) {
@@ -429,27 +429,66 @@ void main() {
         float w2 = sin((q.x + q.y) * 0.047 + time * 2.4) * 0.5 + sin((q.x - q.y) * 0.081 - time * 3.1) * 0.3;
         vec3 n = normalize(vec3(0.06 * w1 + 0.05 * w2, 1.0, 0.05 * w2 - 0.04 * w1));
         vec3 v = normalize(viewPos - worldPos);
-        float fres = pow(1.0 - max(dot(n, v), 0.0), 3.0);
-        col = mix(waterColor, fogColor * 1.05, 0.2 + 0.6 * fres);
-        col *= 0.95 + 0.08 * w2;
-        float spec = pow(max(dot(reflect(-v, n), -sunDir), 0.0), 140.0);
-        col += vec3(1.0, 0.95, 0.85) * spec * 0.9;
-        alpha = 0.86;
+        float fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+        vec3 r = reflect(-v, n);
+        // deep water colour, with the sky mirrored in it at grazing angles
+        col = mix(waterColor * (0.85 + 0.25 * max(dot(n, -sunDir), 0.0)), skyColor(r), clamp(0.15 + fres * 0.9, 0.0, 0.9));
+        col *= 0.96 + 0.06 * w2;
+        float spec = pow(max(dot(r, -sunDir), 0.0), 220.0) * 3.0 + pow(max(dot(r, -sunDir), 0.0), 30.0) * 0.25;
+        col += sunColor * spec;
+        alpha = 0.9;
     } else {
         vec3 n = normalize(fragNormal);
         vec3 base = fragColor.rgb;
-        float g = vnoise(worldPos.xz / 41.0) * 0.6 + vnoise(worldPos.xz / 11.0) * 0.4;
-        base *= 0.9 + 0.18 * g;
+        // on steep ground let height play into the pattern too, so cliffs don't get stretched streaks
+        vec2 q = worldPos.xz + worldPos.y * vec2(0.25, 0.2) * (1.0 - smoothstep(0.6, 0.9, n.y));
+        // Bumpy relief the mesh is too coarse for: ridges and gullies from noise slopes,
+        // strongest on steep ground (cliffs, mountain sides), gentle on the grass
+        float steep = 1.0 - smoothstep(0.55, 0.9, n.y);
+        vec2 e = vec2(6.0, 0.0);
+        vec2 qa = q / 95.0, qb = q / 26.0;
+        float h0 = vnoise(qa) + vnoise(qb) * 0.35;
+        float hx = vnoise(qa + e.xy / 95.0) + vnoise(qb + e.xy / 26.0) * 0.35;
+        float hz = vnoise(qa + e.yx / 95.0) + vnoise(qb + e.yx / 26.0) * 0.35;
+        vec2 grad = vec2(hx - h0, hz - h0) / 6.0 * 95.0;
+        n = normalize(n + vec3(-grad.x, 0.0, -grad.y) * (0.05 + 0.30 * steep));
+        // Snow only settles on gentler slopes: rock shows through on the steep faces
+        float lumB = dot(base, vec3(0.333));
+        float snowy = smoothstep(0.78, 0.88, lumB) * (1.0 - smoothstep(0.03, 0.08, max(base.r, max(base.g, base.b)) - min(base.r, min(base.g, base.b))));
+        float bare = snowy * smoothstep(0.72, 0.52, n.y + (h0 - 0.65) * 0.25);
+        base = mix(base, vec3(0.40, 0.39, 0.38) * (0.85 + 0.3 * h0), bare);
+        // detail fades out with distance so far hills don't shimmer
+        float fine = 1.0 - smoothstep(150.0, 900.0, dist);
+        float mid = 1.0 - smoothstep(900.0, 4000.0, dist);
+        float g = vnoise(q / 41.0) * 0.6 + vnoise(q / 11.0) * 0.4;
+        float macro = vnoise(q / 420.0) * 0.6 + vnoise(q / 160.0) * 0.4;
+        base *= 0.9 + 0.18 * mix(0.5, g, mid) + 0.14 * (macro - 0.5);
+        // grassy colours get drier, yellower patches and greener damp hollows
+        float grassy = smoothstep(0.02, 0.08, base.g - max(base.r, base.b));
+        float dry = smoothstep(0.45, 0.8, vnoise(q / 300.0 + 3.7) * 0.7 + vnoise(q / 70.0) * 0.3);
+        base = mix(base, base * vec3(1.25, 1.08, 0.72), dry * grassy * 0.6);
+        // clumps: darker, bluer-green tufts against lighter, yellower blades
+        float clump = vnoise(q / 5.5) * 0.6 + vnoise(q / 17.0) * 0.4;
+        base = mix(base, base * mix(vec3(0.82, 0.88, 0.86), vec3(1.10, 1.06, 0.92), clump), grassy * mix(0.25, 0.7, fine));
+        // blades and pebbles up close
+        float blades = (vnoise(q / 1.3) - 0.5) * 0.6 + (vnoise(q / 3.7) - 0.5) * 0.4;
+        base *= 1.0 + blades * 0.16 * fine;
         if (stripes > 0.0) {
             float sx = mod(floor(worldPos.x / 150.0), 2.0), sz = mod(floor(worldPos.z / 150.0), 2.0);
             base *= 1.0 - stripes * fragColor.a * (sx + sz);
         }
-        float ndl = max(dot(n, -sunDir), 0.0) / 0.876;
+        // Sun light, scaled so flat ground looks as designed whatever the sun's height,
+        // plus sky light that is bluer in the shade
+        float flatLit = max(-sunDir.y, 0.15);
+        float ndl = max(dot(n, -sunDir), 0.0);
         if (rtOn == 1 && ndl > 0.0 && fog < 1.0) ndl *= 1.0 - 0.9 * rtShadow(worldPos, n);
-        col = base * (0.55 + 0.45 * ndl);
+        float sunLit = min(ndl / flatLit, 1.7);
+        vec3 skyAmb = mix(skyHorizon, skyZenith, 0.55);
+        vec3 amb = mix(vec3(1.0), skyAmb / max(dot(skyAmb, vec3(0.333)), 0.05), 0.35) * (0.48 + 0.12 * n.y);
+        col = base * (amb + 0.45 * sunLit * sunColor / max(dot(sunColor, vec3(0.333)), 0.05));
     }
     col *= tint;
-    finalColor = vec4(mix(col, fogColor, fog), alpha);
+    finalColor = vec4(applyFog(col, worldPos), alpha);
 }";
 }
 

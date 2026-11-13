@@ -308,14 +308,25 @@ class Race
         Started && Player.Movement.CurrentSpeed > 15 &&
         Vector2.Dot(Player.Movement.Forward, Track.DirectionAt(Player.TrackIndex)) < -0.3f;
 
-    public void Draw()
+    PostFx.Grade Look => new() { Exposure = Def.Exposure, Saturation = Def.Saturation, Bloom = Def.Bloom, Contrast = Def.Contrast, WhiteBalance = Def.WhiteBalance };
+
+    // The 3D view, drawn off-screen for post-processing. Runs before the frame starts drawing.
+    public void PreDraw()
     {
-        // Sky, with clouds painted on it
-        int sw = Raylib.GetScreenWidth(), sh = Raylib.GetScreenHeight();
+        if (!PostFx.Enabled) return;
+        PostFx.BeginScene();
+        var (w, h) = PostFx.SceneSize();
+        DrawScene(w, h);
+        PostFx.EndScene(camera, Scene3D.SunDir, Look);
+    }
+
+    // Sky, land, road, scenery and cars
+    void DrawScene(int pixelWidth, int pixelHeight)
+    {
+        Sky.Apply(Def);
         Raylib.ClearBackground(Def.Horizon);
-        Raylib.DrawRectangleGradientV(0, 0, sw, sh / 2, Def.SkyTop, Def.Horizon);
+        Sky.Draw(camera, Def, pixelWidth, pixelHeight);
         Scenery scenery = Track.Scenery!;
-        scenery.DrawSky(camera);
 
         Raylib.BeginMode3D(camera);
         Scene3D.Ground = Track.Terrain;
@@ -323,7 +334,7 @@ class Race
         Vector3 forward = camera.Target - camera.Position;
 
         // Shapes the ray tracer casts shadows and reflections from
-        RayTracing.Begin(new Color(62, 64, 70, 255), Player.Y);
+        RayTracing.Begin(new Color(80, 80, 83, 255), Player.Y);
         foreach (Racer r in Racers) RayTracing.AddCar(r.Car.Type, r.Movement.Position, r.Movement.Heading, r.Color, 1, r.Y);
         Track.AddRayCasters(camera.Position, forward);
         RayTracing.Upload();
@@ -349,10 +360,17 @@ class Race
         foreach (Racer r in Racers) r.Draw();
         Raylib.EndMode3D();
         Supersample.Setup2D();
+    }
+
+    public void Draw()
+    {
+        if (PostFx.Enabled) PostFx.Present();
+        else DrawScene(Supersample.PixelSize.W, Supersample.PixelSize.H);
+        Supersample.Setup2D();
 
         DrawNameTags();
 
-        Ui.Vignette(0.45f);
+        if (!PostFx.Enabled) Ui.Vignette(0.45f);
         Ui.BeginHud();
         Hud.Draw(this);
         Ui.End();

@@ -38,6 +38,13 @@ class TrackDef
     public float FogStart = 1800, FogEnd = 6500;
     public float Stripes;                         // mowed-grass stripes strength (0 = none)
 
+    // Light and camera look
+    public float SunElevation = 40, SunAzimuth = -140;  // degrees above the horizon / around from +x
+    public Vector3 SunColor = Sky.DefaultSunColor;
+    public float CloudCover = 0.45f;                    // 0 = clear sky
+    public float Exposure = 1, Saturation = 1, Bloom = 0.12f, Contrast = 0.18f;
+    public Vector3 WhiteBalance = Vector3.One;
+
     // Scenery amounts
     public int Trees, Rocks, Cacti, Turbines, Balloons, Flocks, Tumbleweeds;
     public float PineShare = 0.5f;
@@ -64,13 +71,15 @@ class TrackDef
             RockLine = 520,
             WaterLevel = -46,
             Lakes = new[] { (new Vector2(1250, 1250), 360f, 120f), (new Vector2(3500, 2300), 600f, 140f) },
-            Grass = new(72, 124, 60, 255), GrassDark = new(56, 104, 50, 255),
+            Grass = new(82, 120, 58, 255), GrassDark = new(64, 100, 48, 255),
             Rock = new(122, 116, 100, 255), Snow = new(236, 240, 246, 255), Sand = new(170, 160, 112, 255),
             Verge = new(58, 102, 52, 255),
             Water = new(46, 104, 134, 255),
             SkyTop = new(92, 148, 214, 255), Horizon = new(196, 214, 228, 255),
             FogStart = 1800, FogEnd = 7000,
             Stripes = 0.055f,
+            SunElevation = 38, SunAzimuth = -140,
+            CloudCover = 0.48f, Exposure = 1.0f, Saturation = 1.0f,
             Trees = 230, Rocks = 25, Turbines = 5, Balloons = 4, Flocks = 2, PineShare = 0.4f,
             FlagColors = new Color[] { new(220, 40, 48, 255), new(250, 250, 250, 255), new(40, 110, 220, 255) },
         },
@@ -93,12 +102,14 @@ class TrackDef
             RockLine = 560, SnowLine = 940,
             WaterLevel = -60,
             Lakes = new[] { (new Vector2(-700, 1300), 700f, 260f) },
-            Grass = new(70, 114, 58, 255), GrassDark = new(48, 88, 50, 255),
+            Grass = new(78, 108, 56, 255), GrassDark = new(54, 84, 46, 255),
             Rock = new(118, 114, 108, 255), Snow = new(238, 242, 248, 255), Sand = new(140, 132, 110, 255),
             Verge = new(54, 92, 50, 255),
             Water = new(38, 92, 120, 255),
             SkyTop = new(70, 130, 210, 255), Horizon = new(204, 220, 236, 255),
             FogStart = 2400, FogEnd = 9500,
+            SunElevation = 46, SunAzimuth = -115, SunColor = new Vector3(1.0f, 0.97f, 0.92f),
+            CloudCover = 0.42f, Exposure = 1.0f, Saturation = 0.98f, WhiteBalance = new Vector3(0.98f, 1.0f, 1.03f),
             Trees = 340, Rocks = 70, Flocks = 3, PineShare = 0.92f,
             FlagColors = new Color[] { new(220, 30, 40, 255), new(250, 250, 250, 255) },
         },
@@ -126,6 +137,8 @@ class TrackDef
             SkyTop = new(64, 86, 156, 255), Horizon = new(248, 178, 120, 255), Cloud = new(255, 214, 190, 255),
             Tint = new Vector3(1.08f, 0.96f, 0.86f),
             FogStart = 2000, FogEnd = 8500,
+            SunElevation = 11, SunAzimuth = 14, SunColor = new Vector3(1.0f, 0.70f, 0.42f),
+            CloudCover = 0.30f, Exposure = 1.0f, Saturation = 1.02f, Bloom = 0.16f, WhiteBalance = new Vector3(1.03f, 1.0f, 0.96f),
             Trees = 0, Rocks = 90, Cacti = 170, Flocks = 2, Tumbleweeds = 10,
             FlagColors = new Color[] { new(250, 120, 30, 255), new(30, 30, 34, 255), new(250, 220, 60, 255) },
         },

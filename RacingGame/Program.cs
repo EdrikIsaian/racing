@@ -17,6 +17,7 @@ Raylib.SetExitKey(KeyboardKey.Null); // Esc pauses instead of closing the window
 bool screenshotRun = Environment.GetEnvironmentVariable("RACING_SCREENSHOTS") == "1";
 if (!screenshotRun) Raylib.ToggleBorderlessWindowed(); // start full screen
 if (Environment.GetEnvironmentVariable("RACING_RT") == "0") RayTracing.Enabled = false; // start with ray tracing off
+if (Environment.GetEnvironmentVariable("RACING_FX") == "0") PostFx.Enabled = false;      // start without post-processing
 Ui.LoadFont();
 Scene3D.Load();
 Audio.Init();
@@ -48,6 +49,7 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
     if (Raylib.IsKeyPressed(KeyboardKey.F3)) PerfOverlay.Toggle();
     if (Raylib.IsKeyPressed(KeyboardKey.M)) Audio.MusicMuted = !Audio.MusicMuted;
     if (Raylib.IsKeyPressed(KeyboardKey.T)) RayTracing.Enabled = !RayTracing.Enabled;
+    if (Raylib.IsKeyPressed(KeyboardKey.G)) PostFx.Enabled = !PostFx.Enabled;
     PerfOverlay.Record(Raylib.GetFrameTime());
 
     // Time since last frame, capped so a hiccup doesn't teleport the cars
@@ -74,6 +76,7 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
 }
 
 Supersample.Unload();
+PostFx.Unload();
 Scene3D.Unload();
 Audio.Shutdown();
 Ui.UnloadFont();

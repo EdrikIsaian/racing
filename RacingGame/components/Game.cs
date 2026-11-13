@@ -208,7 +208,11 @@ class Game
     // 3D renders that go into their own images. Runs before the frame starts drawing.
     public void PreDraw()
     {
-        if (state != GameState.Menu) return;
+        if (state != GameState.Menu)
+        {
+            race?.PreDraw();
+            return;
+        }
         Car car = cars[selectedCar];
         float e = 1 - MathF.Pow(1 - showcaseT, 3);
         // Twice the screen resolution, then shrunk: smooth edges

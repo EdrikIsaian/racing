@@ -54,6 +54,11 @@ static class Supersample
         Rlgl.LoadIdentity();
     }
 
+    // Size in pixels of what is being drawn into this frame
+    public static (int W, int H) PixelSize => active
+        ? (target.Texture.Width, target.Texture.Height)
+        : (Raylib.GetRenderWidth(), Raylib.GetRenderHeight());
+
     public static string? CaptureTo; // file name for a screenshot of this frame
 
     public static void End()

@@ -241,9 +241,9 @@ class Track
 
         // Layers from the outside in: darker grass verge, kerb-side shoulder, asphalt, rubbered line
         Band(Width + 90, Def.Verge);
-        Band(Width + 26, new Color(36, 38, 43, 255));
-        Band(Width, new Color(62, 64, 70, 255));
-        Band(Width * 0.38f, new Color(56, 58, 64, 255));
+        Band(Width + 26, new Color(50, 50, 52, 255));
+        Band(Width, new Color(80, 80, 83, 255));
+        Band(Width * 0.38f, new Color(70, 70, 73, 255));
 
         // Edges: red/white kerbs in corners, a white line on straights
         Color kerbRed = new(206, 36, 44, 255), kerbWhite = new(242, 242, 244, 255);
