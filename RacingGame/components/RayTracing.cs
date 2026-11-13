@@ -89,6 +89,11 @@ static class RayTracing
             foreach (var (centre, half) in HeadCar.Proxy) AddModelBox(pos, yaw, s, centre, half, HeadCar.Skin);
             return;
         }
+        if (type == CarType.BurgerCar)
+        {
+            foreach (var (centre, half, colour) in BurgerCar.Proxy) AddModelBox(pos, yaw, s, centre, half, colour);
+            return;
+        }
         CarProxy p = proxies[type];
         // Lower body (starts at the ground clearance so the ground under the car is outside it)
         AddModelBox(pos, yaw, s, new(0, (p.Clearance + p.Top - 0.03f) / 2, 0), new(p.L / 2, (p.Top - 0.03f - p.Clearance) / 2, p.W / 2), paint);

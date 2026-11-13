@@ -25,6 +25,7 @@ class Game
         new Car("Porsche", "911 GT3", CarType.SportsCar, 70, 318, 0.95f, new Color(250, 210, 30, 255)),
         new Car("Ferrari", "LaFerrari", CarType.HyperCar, 85, 350, 0.82f, new Color(210, 30, 30, 255)),
         new Car("Meme Motors", "Big Head", CarType.HeadCar, 62, 300, 0.78f, new Color(214, 120, 62, 255)),
+        new Car("Krusty Krab", "Patty Wagon", CarType.BurgerCar, 55, 260, 0.85f, new Color(228, 162, 89, 255)),
     };
     int selectedCar;
     int laps = 3;
@@ -198,7 +199,7 @@ class Game
         // Twice the screen resolution, then shrunk: smooth edges
         float pixels = Ui.Scale * Raylib.GetRenderWidth() / (float)Raylib.GetScreenWidth() * 2;
         float spin = -2.4f + (float)Raylib.GetTime() * 0.35f;
-        Showcase.Render(car.Type, car.Color, spin, 0.85f + 0.15f * e, (int)(ShowcaseArea.Width * pixels), (int)(ShowcaseArea.Height * pixels));
+        Showcase.Render(car.Type, car.Color, spin, (0.85f + 0.15f * e) * (car.Type == CarType.BurgerCar ? 0.72f : 1), (int)(ShowcaseArea.Width * pixels), (int)(ShowcaseArea.Height * pixels));
     }
 
     public void Draw()
@@ -237,6 +238,7 @@ class Game
         CarType.Sedan => "Sport sedan",
         CarType.SportsCar => "Sports car",
         CarType.HeadCar => "Head car",
+        CarType.BurgerCar => "Burger",
         _ => "Hypercar",
     };
 
@@ -311,19 +313,21 @@ class Game
 
         Color text = selected ? Ui.TextColor : Ui.Muted;
         Ui.DrawText($"0{i + 1}", r.X + 16, r.Y + 13, 12, selected ? Ui.Accent : Ui.Dim, Typeface.Bold);
-        // Name shrinks to fit next to the icon (five tabs are narrow)
+        // Name shrinks to fit next to the icon (six tabs are narrow)
         string name = car.Model.ToUpperInvariant();
         float room = r.Width - 16 - 58, size = 22;
         float nameW = Ui.MeasureText(name, size, Typeface.Display, 0.03f);
-        if (nameW > room) size = MathF.Max(13, size * room / nameW);
+        if (nameW > room) size = MathF.Max(10, size * room / nameW);
         Ui.DrawText(name, r.X + 16, r.Y + 29 + (22 - size) * 0.7f, size, text, Typeface.Display, 0.03f);
-        if (car.Type == CarType.HeadCar)
+        if (car.Type is CarType.HeadCar or CarType.BurgerCar)
         {
-            // The photo itself, small, as its icon
-            Rectangle src = HeadCar.PhotoArea;
-            float h = 23, w = h * src.Width / src.Height;
+            // The picture itself, small, as its icon
+            bool head = car.Type == CarType.HeadCar;
+            Texture2D icon = head ? HeadCar.Icon : BurgerCar.Icon;
+            Rectangle src = head ? HeadCar.PhotoArea : new Rectangle(0, 0, icon.Width, icon.Height);
+            float h = head ? 23 : 27, w = h * src.Width / src.Height;
             Rectangle dst = new(r.X + r.Width - 34 - w / 2, r.Y + r.Height / 2 - h / 2, w, h);
-            Raylib.DrawTexturePro(HeadCar.Icon, src, dst, Vector2.Zero, 0, selected ? Color.White : new Color(150, 150, 150, 255));
+            Raylib.DrawTexturePro(icon, src, dst, Vector2.Zero, 0, selected ? Color.White : new Color(150, 150, 150, 255));
         }
         else
             Racer.DrawCar(new Vector2(r.X + r.Width - 34, r.Y + r.Height / 2), -MathF.PI / 2, selected ? car.Color : Ui.Alpha(Darken(car.Color), 1f), 1.05f, 0, car.Type);

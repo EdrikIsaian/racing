@@ -63,6 +63,9 @@ static unsafe class Scene3D
         Model head = HeadCar.Build(dir);
         UseLitShader(ref head);
         cars[CarType.HeadCar] = new CarModels(head, default, default, HeadCar.WheelRadius, 0.30f, HeadCar.Wheelbase, 1.72f, HeadCar.Length, HeadCar.Width);
+        Model burger = BurgerCar.Build(dir);
+        UseLitShader(ref burger);
+        cars[CarType.BurgerCar] = new CarModels(burger, default, default, BurgerCar.WheelRadius, BurgerCar.WheelWidth, BurgerCar.Wheelbase, BurgerCar.Track, BurgerCar.Length, BurgerCar.Width);
         wheel = LoadLit(dir, "wheel.glb");
         pine = LoadLit(dir, "tree_pine.glb");
         round = LoadLit(dir, "tree_round.glb");
@@ -95,6 +98,7 @@ static unsafe class Scene3D
             if (c.Tail.MeshCount > 0) Raylib.UnloadModel(c.Tail);
         }
         HeadCar.Unload();
+        BurgerCar.Unload();
         Raylib.UnloadModel(wheel);
         Raylib.UnloadModel(pine);
         Raylib.UnloadModel(round);
@@ -251,6 +255,12 @@ static unsafe class Scene3D
             Raylib.SetShaderValue(lit, litTexBlur, HeadCar.EdgeBlur, ShaderUniformDataType.Float);
             Raylib.DrawModelEx(paint, pos, up, yaw, scl, Color.White);
             Raylib.SetShaderValue(lit, litTexBlur, 0f, ShaderUniformDataType.Float);
+        }
+        else if (type == CarType.BurgerCar)
+        {
+            // Bread, lettuce and cartoon riders: matte, with only a hint of sheen
+            Reflect(0.05f);
+            Raylib.DrawModelEx(paint, pos, up, yaw, scl, Color.White);
         }
         else
         {

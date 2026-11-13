@@ -141,6 +141,7 @@ class Racer
         CarType.Sedan => (40f, 19f, 18f, -1.5f, false, 5.5f),
         CarType.SportsCar => (37f, 19.5f, 14f, -2f, true, 6f),
         CarType.HeadCar => (40f, 20f, 0f, 0f, false, 9f),
+        CarType.BurgerCar => (38f, 28f, 0f, 0f, false, 13f),
         _ => (40f, 21f, 12f, 0f, true, 7f), // hypercar: long, wide, tiny canopy
     };
 
