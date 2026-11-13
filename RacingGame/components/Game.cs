@@ -28,6 +28,7 @@ class Game
         new Car("Krusty Krab", "Patty Wagon", CarType.BurgerCar, 55, 260, 0.85f, new Color(228, 162, 89, 255)),
     };
     int selectedCar;
+    int selectedTrack;
     int laps = 3;
     int opponents = 3;
     int difficulty = 1;
@@ -35,8 +36,8 @@ class Game
     static readonly string[] DifficultyNames = { "Easy", "Normal", "Hard" };
     static readonly float[] DifficultySkill = { 0.72f, 0.88f, 0.98f };
 
-    // Best lap per car for this session
-    readonly Dictionary<Car, float> bestLaps = new();
+    // Best lap per car and track for this session
+    readonly Dictionary<(Car, TrackDef), float> bestLaps = new();
 
     readonly List<Button> menuButtons = new();
     readonly List<Button> pauseButtons = new();
@@ -46,7 +47,8 @@ class Game
     static readonly Vector2 Turntable = new(440, 404);
     const float StripX = 80, StripY = 596, StripW = 710, StripH = 66, StripGap = 10;
     static readonly Rectangle SidePanel = new(850, 96, 380, 550);
-    const float SettingsY = 384, SettingsRowH = 42;
+    const float TrackCardY = 96 + 186, TrackCardH = 100;
+    const float SettingsY = 96 + 334, SettingsRowH = 34;
 
     float showcaseT = 1;   // 0 → 1 slide-in when you switch car
     int showcaseDir = 1;
@@ -60,7 +62,9 @@ class Game
         AddSelector(right, SettingsY + SettingsRowH, () => opponents = Math.Max(0, opponents - 1), () => opponents = Math.Min(5, opponents + 1));
         AddSelector(right, SettingsY + SettingsRowH * 2, () => difficulty = Math.Max(0, difficulty - 1), () => difficulty = Math.Min(2, difficulty + 1));
         AddSelector(right, SettingsY + SettingsRowH * 3, () => manualGears = !manualGears, () => manualGears = !manualGears);
-        menuButtons.Add(new Button(SidePanel.X + 24, SidePanel.Y + SidePanel.Height - 80, SidePanel.Width - 48, 56, "START RACE", StartRace, 26, ButtonStyle.Primary));
+        menuButtons.Add(Button.Arrow(SidePanel.X + 24 + 16, TrackCardY + TrackCardH / 2, 28, -1, () => SelectTrack(-1)));
+        menuButtons.Add(Button.Arrow(right - 16, TrackCardY + TrackCardH / 2, 28, 1, () => SelectTrack(1)));
+        menuButtons.Add(new Button(SidePanel.X + 24, SidePanel.Y + SidePanel.Height - 70, SidePanel.Width - 48, 52, "START RACE", StartRace, 26, ButtonStyle.Primary));
         menuButtons.Add(new Button(1146, 28, 84, 34, "QUIT", () => QuitRequested = true, 17, ButtonStyle.Ghost));
         menuButtons.Add(Button.Arrow(112, Turntable.Y, 46, -1, () => SelectCar(-1)));
         menuButtons.Add(Button.Arrow(768, Turntable.Y, 46, 1, () => SelectCar(1)));
@@ -75,9 +79,18 @@ class Game
 
     void AddSelector(float rightX, float rowY, Action minus, Action plus)
     {
-        menuButtons.Add(Button.Arrow(rightX - 136, rowY + 16, 30, -1, minus));
-        menuButtons.Add(Button.Arrow(rightX - 15, rowY + 16, 30, 1, plus));
+        menuButtons.Add(Button.Arrow(rightX - 136, rowY + 14, 26, -1, minus));
+        menuButtons.Add(Button.Arrow(rightX - 15, rowY + 14, 26, 1, plus));
     }
+
+    void SelectTrack(int delta)
+    {
+        int n = TrackDef.All.Length;
+        selectedTrack = (selectedTrack + delta + n) % n;
+        Audio.Whoosh();
+    }
+
+    public void PickTrack(int i) => selectedTrack = Math.Clamp(i, 0, TrackDef.All.Length - 1);
 
     void SelectCar(int delta)
     {
@@ -92,7 +105,7 @@ class Game
 
     void StartRace()
     {
-        race = new Race(cars[selectedCar], opponents, laps, DifficultySkill[difficulty], manualGears);
+        race = new Race(TrackDef.All[selectedTrack], cars[selectedCar], opponents, laps, DifficultySkill[difficulty], manualGears);
         resultsDelay = 0;
         state = GameState.Racing;
     }
@@ -144,9 +157,9 @@ class Game
     void SaveBestLap()
     {
         float best = race!.Player.BestLap;
-        Car car = race.Player.Car;
-        if (best > 0 && (!bestLaps.TryGetValue(car, out float old) || best < old))
-            bestLaps[car] = best;
+        var key = (race.Player.Car, race.Def);
+        if (best > 0 && (!bestLaps.TryGetValue(key, out float old) || best < old))
+            bestLaps[key] = best;
     }
 
     void UpdateMenu()
@@ -155,6 +168,8 @@ class Game
             SelectCar(-1);
         if (Raylib.IsKeyPressed(KeyboardKey.Right) || Raylib.IsKeyPressed(KeyboardKey.D))
             SelectCar(1);
+        if (Raylib.IsKeyPressed(KeyboardKey.Tab))
+            SelectTrack(Raylib.IsKeyDown(KeyboardKey.LeftShift) || Raylib.IsKeyDown(KeyboardKey.RightShift) ? -1 : 1);
         if (Raylib.IsKeyPressed(KeyboardKey.Enter))
         {
             StartRace();
@@ -296,7 +311,7 @@ class Game
 
         foreach (Button b in menuButtons) b.Draw();
 
-        Ui.KeyHints(640, 684, new[] { ("A  D", "Choose car"), ("ENTER", "Start race"), ("M", Audio.MusicMuted ? "Music off" : "Music on"), ("T", RayTracing.Enabled ? "Ray tracing on" : "Ray tracing off"), ("F", "Full screen"), ("ESC", "Quit") });
+        Ui.KeyHints(640, 684, new[] { ("A  D", "Choose car"), ("TAB", "Track"), ("ENTER", "Start race"), ("M", Audio.MusicMuted ? "Music off" : "Music on"), ("T", RayTracing.Enabled ? "Ray tracing on" : "Ray tracing off"), ("F", "Full screen"), ("ESC", "Quit") });
         Ui.End();
     }
 
@@ -341,21 +356,15 @@ class Game
         Ui.GlassPanel(p, 18, new Color(14, 16, 22, 225));
         float x0 = p.X + 24, x1 = p.X + p.Width - 24, w = x1 - x0;
 
-        Ui.Label("Performance", x0, p.Y + 24, Ui.Muted);
-        DrawStat("Top speed", $"{car.MaxSpeed:F0}", "km/h", car.MaxSpeed / 360f, x0, x1, p.Y + 50);
-        DrawStat("Acceleration", $"{car.Acceleration / 9f:0.0}", "/ 10", car.Acceleration / 90f, x0, x1, p.Y + 102);
-        DrawStat("Handling", $"{car.Handling * 10:0.0}", "/ 10", car.Handling, x0, x1, p.Y + 154);
+        Ui.Label("Performance", x0, p.Y + 22, Ui.Muted);
+        DrawStat("Top speed", $"{car.MaxSpeed:F0}", "km/h", car.MaxSpeed / 360f, x0, x1, p.Y + 42);
+        DrawStat("Acceleration", $"{car.Acceleration / 9f:0.0}", "/ 10", car.Acceleration / 90f, x0, x1, p.Y + 88);
+        DrawStat("Handling", $"{car.Handling * 10:0.0}", "/ 10", car.Handling, x0, x1, p.Y + 134);
 
-        float by = p.Y + 214;
-        Ui.RoundRect(new Rectangle(x0, by, w, 46), 10, new Color(255, 255, 255, 8));
-        Ui.Label("Personal best", x0 + 14, by + 17, Ui.Muted);
-        if (bestLaps.TryGetValue(car, out float t))
-            Ui.TextRight(Ui.FormatTime(t), x1 - 14, by + 13, 20, Ui.Purple, Typeface.Bold);
-        else
-            Ui.TextRight("No time set", x1 - 14, by + 15, 14, Ui.Dim, Typeface.Body);
+        DrawTrackCard(car, x0, x1, TrackCardY);
 
-        Raylib.DrawLineEx(new Vector2(x0, SettingsY - 26), new Vector2(x1, SettingsY - 26), 1, Ui.Stroke);
-        Ui.Label("Race settings", x0, SettingsY - 8, Ui.Muted);
+        Raylib.DrawLineEx(new Vector2(x0, SettingsY - 24), new Vector2(x1, SettingsY - 24), 1, Ui.Stroke);
+        Ui.Label("Race settings", x0, SettingsY - 12, Ui.Muted);
 
         DrawSetting("Laps", laps.ToString(), 0);
         DrawSetting("Opponents", opponents.ToString(), 1);
@@ -365,10 +374,47 @@ class Game
         void DrawSetting(string label, string value, int row)
         {
             float y = SettingsY + row * SettingsRowH;
-            Ui.DrawText(label, x0, y + 8, 16, Ui.TextColor, Typeface.Body);
-            Ui.TextCentered(value, x1 - 75, y + 6, 24, Ui.TextColor, Typeface.Display, 0.04f);
-            if (row < 3) Raylib.DrawLineEx(new Vector2(x0, y + SettingsRowH - 7), new Vector2(x1, y + SettingsRowH - 7), 1, new Color(255, 255, 255, 10));
+            Ui.DrawText(label, x0, y + 6, 16, Ui.TextColor, Typeface.Body);
+            Ui.TextCentered(value, x1 - 75, y + 4, 22, Ui.TextColor, Typeface.Display, 0.04f);
+            if (row < 3) Raylib.DrawLineEx(new Vector2(x0, y + SettingsRowH - 4), new Vector2(x1, y + SettingsRowH - 4), 1, new Color(255, 255, 255, 10));
         }
+    }
+
+    // The chosen circuit: name, character, length and climb, best lap, and a small map coloured by height
+    void DrawTrackCard(Car car, float x0, float x1, float y)
+    {
+        TrackDef def = TrackDef.All[selectedTrack];
+        Track t = Track.Get(def);
+        Rectangle card = new(x0, y, x1 - x0, TrackCardH);
+        Ui.RoundRect(card, 12, new Color(255, 255, 255, 8));
+        Ui.RoundOutline(card, 12, 1, Ui.Stroke);
+
+        Rectangle map = new(x1 - 36 - 88, y + 12, 84, TrackCardH - 24);
+        float tx = x0 + 40, room = map.X - 10 - tx;
+        Ui.Label($"Track {selectedTrack + 1} / {TrackDef.All.Length}", tx, y + 12, Ui.Accent);
+        if (bestLaps.TryGetValue((car, def), out float best))
+            Ui.TextRight($"PB {Ui.FormatTime(best)}", map.X - 10, y + 10, 13, Ui.Purple, Typeface.Bold);
+
+        string name = def.Name.ToUpperInvariant();
+        float size = 26, nameW = Ui.MeasureText(name, size, Typeface.Display, 0.03f);
+        if (nameW > room) size = MathF.Max(12, size * room / nameW);
+        Ui.DrawText(name, tx, y + 28 + (26 - size) * 0.7f, size, Ui.TextColor, Typeface.Display, 0.03f);
+        Ui.DrawText(def.Tagline, tx, y + 58, 13, Ui.Muted, Typeface.Body);
+        Ui.DrawText($"{t.LengthKm:0.0} km  ·  {t.ClimbMetres:0} m climb", tx, y + 77, 12, Ui.Dim, Typeface.Body);
+
+        // Mini map, low parts cool and high parts warm
+        Vector2 sz = t.BoundsMax - t.BoundsMin;
+        float scale = MathF.Min(map.Width / sz.X, map.Height / sz.Y);
+        Vector2 off = new Vector2(map.X, map.Y) + (new Vector2(map.Width, map.Height) - sz * scale) / 2;
+        Vector2 M(Vector2 w) => off + (w - t.BoundsMin) * scale;
+        float lo = t.Heights.Min(), hi = MathF.Max(t.Heights.Max(), lo + 1);
+        for (int i = 0; i < t.Count; i += 3)
+        {
+            float k = (t.Heights[i] - lo) / (hi - lo);
+            Raylib.DrawLineEx(M(t.PointAt(i)), M(t.PointAt(i + 3)), 2.6f, Ui.Lerp(new Color(110, 170, 230, 255), Ui.Accent, k));
+        }
+        Vector2 s0 = M(t.PointAt(0)), sn = t.NormalAt(0) * 5;
+        Raylib.DrawLineEx(s0 - sn, s0 + sn, 2.5f, Color.White);
     }
 
     static void DrawStat(string label, string value, string unit, float ratio, float x0, float x1, float y)
@@ -405,7 +451,7 @@ class Game
         string word = place == 1 ? "VICTORY" : place <= 3 ? "PODIUM FINISH" : "RACE COMPLETE";
         Color hero = place == 1 ? Ui.Accent : Ui.TextColor;
 
-        Ui.Label($"Race result  ·  {r.Laps} {(r.Laps == 1 ? "lap" : "laps")}", x0, py + 30, Ui.Muted);
+        Ui.Label($"Race result  ·  {r.Def.Name}  ·  {r.Laps} {(r.Laps == 1 ? "lap" : "laps")}", x0, py + 30, Ui.Muted);
         string pText = $"P{place}";
         Ui.DrawText(pText, x0 - 3, py + 50, 104, Ui.Alpha(hero, e), Typeface.Display);
         float pw = Ui.MeasureText(pText, 104, Typeface.Display);

@@ -2,80 +2,100 @@ using System.Numerics;
 using Raylib_cs;
 
 // A closed circuit built from a few control points, smoothed with a Catmull-Rom spline
-// and resampled into evenly spaced points along the centre line.
+// and resampled into evenly spaced points along the centre line. Each point also has a road height;
+// the land around it (Terrain) and the scenery are built the first time a race is started on it.
 class Track
 {
     public const float Width = 130f;
     public const float Spacing = 20f; // distance between centre-line samples
 
-    const float Scale = 1.3f;
-    static readonly Vector2[] ControlPoints =
-    {
-        new(900, 300),   // start / finish (top straight)
-        new(1700, 300),
-        new(2400, 380),
-        new(2850, 700),
-        new(2850, 1150),
-        new(2450, 1400),
-        new(1950, 1250),
-        new(1550, 1450),
-        new(1650, 1850),
-        new(1250, 2100),
-        new(600, 2000),
-        new(300, 1500),
-        new(350, 800),
-        new(500, 400),
-    };
-
+    public readonly TrackDef Def;
     public Vector2[] Points = Array.Empty<Vector2>();
+    public float[] Heights = Array.Empty<float>();
     float[] curvature = Array.Empty<float>();
     Vector2[] joinNormals = Array.Empty<Vector2>(); // average of the two segment normals at each point, so bands join without gaps
     bool[] isCorner = Array.Empty<bool>();
     public Vector2 BoundsMin, BoundsMax;
-    readonly List<(Vector2 Pos, float Size, float Shade)> trees = new();
+    readonly List<(Vector2 Pos, float Size, float Shade, float Y, int Variant)> trees = new();
+
+    public Terrain? Terrain { get; private set; }
+    public Scenery? Scenery { get; private set; }
 
     public int Count => Points.Length;
     public float Length => Count * Spacing;
+    public float LengthKm => Length / Scene3D.UnitsPerMetre / 1000f;
+    public float ClimbMetres => (Heights.Max() - Heights.Min()) / Scene3D.UnitsPerMetre;
 
-    public Track()
+    static readonly Dictionary<TrackDef, Track> cache = new();
+
+    // Tracks are built once and kept: the centre line is cheap, the land is built on first race
+    public static Track Get(TrackDef def)
     {
-        Build();
-        PlantTrees();
+        if (!cache.TryGetValue(def, out Track? t)) cache[def] = t = new Track(def);
+        return t;
     }
+
+    Track(TrackDef def)
+    {
+        Def = def;
+        Build();
+    }
+
+    // Builds the land and scenery (a fraction of a second, only the first time)
+    public void EnsureWorld()
+    {
+        if (Terrain != null) return;
+        Terrain = new Terrain(this, Def);
+        PlantTrees();
+        Scenery = new Scenery(this, Terrain, Def);
+    }
+
+    public float HeightAt(Vector2 p) => Terrain?.HeightAt(p) ?? 0;
 
     void Build()
     {
         // 1. Densely sample the spline
         var dense = new List<Vector2>();
-        int n = ControlPoints.Length;
+        var denseH = new List<float>();
+        Vector2[] cp = Def.Points;
+        float[] el = Def.Elevation;
+        int n = cp.Length;
         for (int i = 0; i < n; i++)
         {
-            Vector2 p0 = ControlPoints[(i - 1 + n) % n] * Scale;
-            Vector2 p1 = ControlPoints[i] * Scale;
-            Vector2 p2 = ControlPoints[(i + 1) % n] * Scale;
-            Vector2 p3 = ControlPoints[(i + 2) % n] * Scale;
+            Vector2 p0 = cp[(i - 1 + n) % n] * Def.Scale;
+            Vector2 p1 = cp[i] * Def.Scale;
+            Vector2 p2 = cp[(i + 1) % n] * Def.Scale;
+            Vector2 p3 = cp[(i + 2) % n] * Def.Scale;
             for (int s = 0; s < 60; s++)
-                dense.Add(CatmullRom(p0, p1, p2, p3, s / 60f));
+            {
+                float t = s / 60f;
+                dense.Add(CatmullRom(p0, p1, p2, p3, t));
+                denseH.Add(CatmullRom1(el[(i - 1 + n) % n], el[i], el[(i + 1) % n], el[(i + 2) % n], t));
+            }
         }
 
         // 2. Resample so points are exactly `Spacing` apart
         var pts = new List<Vector2> { dense[0] };
+        var hs = new List<float> { denseH[0] };
         float sinceLast = 0;
         for (int i = 1; i <= dense.Count; i++)
         {
             Vector2 a = dense[i - 1], b = dense[i % dense.Count];
+            float ha = denseH[i - 1], hb = denseH[i % dense.Count];
             float segLen = Vector2.Distance(a, b);
             float pos = 0;
             while (sinceLast + (segLen - pos) >= Spacing)
             {
                 pos += Spacing - sinceLast;
                 pts.Add(Vector2.Lerp(a, b, pos / segLen));
+                hs.Add(ha + (hb - ha) * pos / segLen);
                 sinceLast = 0;
             }
             sinceLast += segLen - pos;
         }
-        if (Vector2.Distance(pts[^1], pts[0]) < Spacing * 0.5f) pts.RemoveAt(pts.Count - 1);
+        if (Vector2.Distance(pts[^1], pts[0]) < Spacing * 0.5f) { pts.RemoveAt(pts.Count - 1); hs.RemoveAt(hs.Count - 1); }
         Points = pts.ToArray();
+        Heights = hs.ToArray();
 
         // 3. Curvature (how sharp the bend is) at each point — used by the AI and for curbs
         curvature = new float[Count];
@@ -102,16 +122,48 @@ class Track
 
     void PlantTrees()
     {
-        var rng = new Random(7); // fixed seed → same scenery every time
-        for (int i = 0; i < 400 && trees.Count < 180; i++)
+        Terrain t = Terrain!;
+        var rng = new Random(Def.Seed); // fixed seed → same scenery every time
+        float spread = Def.Biome == Biome.Alpine ? 3200 : 2600;
+        Vector2 stand = Scenery.GrandstandCentre(this);
+        for (int i = 0; i < Def.Trees * 8 && trees.Count < Def.Trees; i++)
         {
             var p = new Vector2(
-                BoundsMin.X - 500 + (float)rng.NextDouble() * (BoundsMax.X - BoundsMin.X + 1000),
-                BoundsMin.Y - 500 + (float)rng.NextDouble() * (BoundsMax.Y - BoundsMin.Y + 1000));
-            float minDist = Points.Min(c => Vector2.DistanceSquared(c, p));
-            if (minDist > MathF.Pow(Width / 2 + 120, 2))
-                trees.Add((p, 18 + (float)rng.NextDouble() * 22, 0.82f + (float)rng.NextDouble() * 0.3f));
+                BoundsMin.X - spread + (float)rng.NextDouble() * (BoundsMax.X - BoundsMin.X + spread * 2),
+                BoundsMin.Y - spread + (float)rng.NextDouble() * (BoundsMax.Y - BoundsMin.Y + spread * 2));
+            if (!CanPlace(p, Width / 2 + 120)) continue;
+            if (Vector2.Distance(p, stand) < 420) continue;
+            // Woods: trees bunch together where the noise says so
+            if (Noise.Fbm(p / 700f, Def.Seed + 9, 2) < -0.15f && rng.NextDouble() < 0.7) continue;
+            bool pine = rng.NextDouble() < Def.PineShare;
+            int variant = rng.Next(1000) * 2 + (pine ? 0 : 1);
+            trees.Add((p, 18 + (float)rng.NextDouble() * 22, 0.82f + (float)rng.NextDouble() * 0.3f, t.HeightAt(p), variant));
         }
+    }
+
+    // Free ground for scenery: away from the road, above the water, not too steep, below the snow
+    public bool CanPlace(Vector2 p, float clearance)
+    {
+        Terrain t = Terrain!;
+        if (t.DistanceToTrack(p) < clearance + 60) return false;
+        if (DistanceToCentreLine(p) < clearance) return false;
+        float h = t.HeightAt(p);
+        if (t.HasWater && h < t.WaterLevel + 8) return false;
+        if (h > Def.SnowLine - 120) return false;
+        return t.SlopeAt(p) < 0.55f;
+    }
+
+    public float DistanceToCentreLine(Vector2 p)
+    {
+        float best = float.MaxValue;
+        for (int i = 0; i < Count; i += 2) best = MathF.Min(best, Vector2.DistanceSquared(Points[i], p));
+        return MathF.Sqrt(best);
+    }
+
+    static float CatmullRom1(float p0, float p1, float p2, float p3, float t)
+    {
+        float t2 = t * t, t3 = t2 * t;
+        return 0.5f * (2 * p1 + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
     }
 
     static Vector2 CatmullRom(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
@@ -179,28 +231,16 @@ class Track
 
     public void DrawGround()
     {
-        // Grass with mowed stripes in both directions around the circuit, so you can feel your speed
-        Vector2 lo = BoundsMin - new Vector2(9000), hi = BoundsMax + new Vector2(9000);
-        Scene3D.Quad(lo, new Vector2(hi.X, lo.Y), hi, new Vector2(lo.X, hi.Y), new Color(70, 120, 60, 255));
-        const int band = 150;
-        Color stripe = new(0, 0, 0, 14);
-        int x0 = (int)((BoundsMin.X - 2400) / band), x1 = (int)((BoundsMax.X + 2400) / band);
-        int y0 = (int)((BoundsMin.Y - 2400) / band), y1 = (int)((BoundsMax.Y + 2400) / band);
-        for (int x = x0; x <= x1; x += 2)
-            Scene3D.Quad(new(x * band, y0 * band), new((x + 1) * band, y0 * band), new((x + 1) * band, y1 * band), new(x * band, y1 * band), stripe);
-        for (int y = y0; y <= y1; y += 2)
-            Scene3D.Quad(new(x0 * band, y * band), new(x1 * band, y * band), new(x1 * band, (y + 1) * band), new(x0 * band, (y + 1) * band), stripe);
-
         // Tree shadows (painted blobs only for trees the ray tracer isn't handling)
         for (int i = 0; i < trees.Count; i++)
         {
-            var (pos, size, _) = trees[i];
-            if (RayTracing.Enabled && traced[i]) continue;
+            var (pos, size, _, _, _) = trees[i];
+            if (RayTracing.Enabled && traced.Length == trees.Count && traced[i]) continue;
             Scene3D.Disc(pos + new Vector2(Scene3D.SunDir.X, Scene3D.SunDir.Z) * size * 1.2f, size * 1.25f, size * 1.0f, new Vector2(1, 0), new Color(0, 0, 0, 52), 14);
         }
 
         // Layers from the outside in: darker grass verge, kerb-side shoulder, asphalt, rubbered line
-        Band(Width + 90, new Color(58, 102, 52, 255));
+        Band(Width + 90, Def.Verge);
         Band(Width + 26, new Color(36, 38, 43, 255));
         Band(Width, new Color(62, 64, 70, 255));
         Band(Width * 0.38f, new Color(56, 58, 64, 255));
@@ -236,7 +276,8 @@ class Track
     // Puts the gantry and the trees nearest to what the camera looks at into the ray-traced scene
     public void AddRayCasters(Vector3 cameraPos, Vector3 cameraForward)
     {
-        RayTracing.AddGantry(Points[0] + DirectionAt(0) * 14, HeadingAt(0));
+        Vector2 gantry = Points[0] + DirectionAt(0) * 14;
+        RayTracing.AddGantry(gantry, HeadingAt(0), HeightAt(gantry));
         if (traced.Length != trees.Count)
         {
             treeDist = new float[trees.Count];
@@ -255,7 +296,7 @@ class Track
         for (int k = 0; k < trees.Count && !RayTracing.TreesFull; k++)
         {
             int i = treeOrder[k];
-            RayTracing.AddTree(trees[i].Pos, trees[i].Size, i);
+            RayTracing.AddTree(trees[i].Pos, trees[i].Size, trees[i].Variant, trees[i].Y);
             traced[i] = true;
         }
     }
@@ -268,15 +309,19 @@ class Track
         float maxDist = Scene3D.FogEnd + 200;
         for (int i = 0; i < trees.Count; i++)
         {
-            var (pos, size, k) = trees[i];
+            var (pos, size, k, y, variant) = trees[i];
             Vector2 d = pos - cam;
             float dist = d.Length();
             if (dist > maxDist) continue;
             if (dist > 300 && Vector2.Dot(d / dist, fwd) < 0.2f) continue; // behind us
-            Scene3D.DrawTree(pos, size, k, i);
+            Scene3D.DrawTree(pos, size, k, variant, y);
         }
-        Scene3D.DrawGantry(Points[0] + DirectionAt(0) * 14, HeadingAt(0));
+        Vector2 gantry = Points[0] + DirectionAt(0) * 14;
+        Scene3D.DrawGantry(gantry, HeadingAt(0), HeightAt(gantry));
     }
+
+    // The widest road layer once more, for the ray-traced shadow pass over the road
+    public void DrawRoadFootprint() => Band(Width + 90, Color.Black);
 
     // A continuous band of the given width along the centre line, as one quad per segment
     void Band(float width, Color color)

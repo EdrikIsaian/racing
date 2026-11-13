@@ -20,7 +20,7 @@ if (Environment.GetEnvironmentVariable("RACING_RT") == "0") RayTracing.Enabled =
 Ui.LoadFont();
 Scene3D.Load();
 Audio.Init();
-Rlgl.SetClipPlanes(2, 15000); // world units are small (a car is ~40 long), the circuit is ~4000 across
+Rlgl.SetClipPlanes(3, 16000); // world units are small (a car is ~40 long), the circuit is ~4000 across, mountains further
 
 // VSync paces the frames. The FPS cap is only a safety net (e.g. when the window is hidden and
 // VSync stops working), so keep it well above the refresh rate: a cap equal to the refresh rate
@@ -34,6 +34,7 @@ UpdateFpsCap();
 
 Game game = new Game();
 if (int.TryParse(Environment.GetEnvironmentVariable("RACING_CAR"), out int carNo)) game.PickCar(carNo - 1); // RACING_CAR=5: start on car 5
+if (int.TryParse(Environment.GetEnvironmentVariable("RACING_TRACK"), out int trackNo)) game.PickTrack(trackNo - 1); // RACING_TRACK=2: second track
 int frame = 0;
 
 while (!Raylib.WindowShouldClose() && !game.QuitRequested)
@@ -65,7 +66,9 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
         if (frame == 61) game.StartRaceNow();
         if (frame == 150) Supersample.CaptureTo = "shot_grid.png";
         if (frame == 480) Supersample.CaptureTo = "shot_race.png";
-        if (frame == 482) break;
+        if (frame == 1100) Supersample.CaptureTo = "shot_race2.png";
+        if (frame == 1900) Supersample.CaptureTo = "shot_race3.png";
+        if (frame == 1902) break;
     }
     Supersample.End();
 }

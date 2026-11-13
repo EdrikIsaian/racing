@@ -16,6 +16,7 @@ class Movement
 {
     public const float PixelsPerKmh = 2f;   // 100 km/h = 200 px/s
     public const float BrakeDecel = 900f;   // px/s²
+    const float Gravity = 84f * 1.4f;        // 9.8 m/s² in px/s², a bit stronger so hills are felt
     const float ReverseAccel = 300f;
     const float MaxReverse = 140f;
 
@@ -41,7 +42,8 @@ class Movement
     }
 
     // drive: how much the engine can push right now (from the gearbox; 0 while shifting)
-    public void Update(Car car, DriverInput input, bool onTrack, float dt, float drive = 1f)
+    // slope: how much the ground rises per unit driven forward (hills slow you down going up)
+    public void Update(Car car, DriverInput input, bool onTrack, float dt, float drive = 1f, float slope = 0f)
     {
         Vector2 forward = Forward;
         Vector2 right = Right;
@@ -64,6 +66,9 @@ class Movement
             if (vf > 10f) vf = MathF.Max(0, vf - BrakeDecel * input.Brake * dt);
             else vf = MathF.Max(-MaxReverse, vf - ReverseAccel * input.Brake * dt);
         }
+
+        // Gravity along the slope
+        vf -= Gravity * Math.Clamp(slope, -0.5f, 0.5f) * dt;
 
         // Air drag + rolling resistance (much more on grass)
         vf -= vf * (onTrack ? 0.08f : 1.2f) * dt;

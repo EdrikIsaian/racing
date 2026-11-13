@@ -5,7 +5,8 @@ using Raylib_cs;
 // Everything 3D: the Blender models (assets/models, built by blender/build_models.py),
 // the lighting/fog shaders and helpers to draw cars, scenery and flat ground geometry.
 //
-// The game logic stays 2D: a world point (x, y) sits at 3D (x, 0, y) with Y up.
+// The game logic stays 2D: a world point (x, y) sits at 3D (x, height, y) with Y up,
+// where the height comes from the track's land (Ground) — 0 in the menu showroom.
 // World units are the old "pixels"; the models are in metres and scaled by UnitsPerMetre.
 static unsafe class Scene3D
 {
@@ -21,9 +22,15 @@ static unsafe class Scene3D
 
     static readonly Dictionary<CarType, CarModels> cars = new();
     static Model wheel, pine, round, gantry, platform;
+    public static Model Cube, Cylinder, Sphere, Rock, Cone; // unit shapes for procedural scenery
     static Shader lit, ground, rtShadow;
-    static int litViewPos, litFog, litFogColor, litReflect, litTexBlur, litTexSide, groundViewPos, groundFog, groundFogColor, rtViewPos, rtFog;
+    static int litViewPos, litFog, litFogColor, litReflect, litTexBlur, litTexSide, litTint, groundViewPos, groundFog, groundFogColor, groundTint, rtViewPos, rtFog;
     static bool loaded;
+
+    // The land everything stands on during a race (null = flat floor at height 0)
+    public static Terrain? Ground;
+    public static float GroundAt(Vector2 p) => Ground?.HeightAt(p) ?? 0;
+    const float DecalLift = 1.2f; // ground layers float this far above the land
 
     public static Vector3 W(Vector2 p, float height = 0) => new(p.X, height, p.Y);
 
@@ -48,6 +55,8 @@ static unsafe class Scene3D
         groundViewPos = Raylib.GetShaderLocation(ground, "viewPos");
         groundFog = Raylib.GetShaderLocation(ground, "fogRange");
         groundFogColor = Raylib.GetShaderLocation(ground, "fogColor");
+        groundTint = Raylib.GetShaderLocation(ground, "tint");
+        litTint = Raylib.GetShaderLocation(lit, "tint");
         Raylib.SetShaderValue(lit, Raylib.GetShaderLocation(lit, "sunDir"), SunDir, ShaderUniformDataType.Vec3);
 
         string dir = Path.Combine(AppContext.BaseDirectory, "assets", "models");
@@ -73,12 +82,24 @@ static unsafe class Scene3D
 
         platform = Raylib.LoadModelFromMesh(Raylib.GenMeshCylinder(1, 1, 64));
         UseLitShader(ref platform);
+        Cube = Shape(Raylib.GenMeshCube(1, 1, 1));
+        Cylinder = Shape(Raylib.GenMeshCylinder(1, 1, 14));
+        Sphere = Shape(Raylib.GenMeshSphere(1, 12, 16));
+        Rock = Shape(Raylib.GenMeshSphere(1, 5, 7));
+        Cone = Shape(Raylib.GenMeshCone(1, 1, 16));
         loaded = true;
     }
 
     static Model LoadLit(string dir, string file)
     {
         Model m = Raylib.LoadModel(Path.Combine(dir, file));
+        UseLitShader(ref m);
+        return m;
+    }
+
+    static Model Shape(Mesh mesh)
+    {
+        Model m = Raylib.LoadModelFromMesh(mesh);
         UseLitShader(ref m);
         return m;
     }
@@ -104,6 +125,8 @@ static unsafe class Scene3D
         Raylib.UnloadModel(round);
         Raylib.UnloadModel(gantry);
         Raylib.UnloadModel(platform);
+        foreach (Model m in new[] { Cube, Cylinder, Sphere, Rock, Cone }) Raylib.UnloadModel(m);
+        Terrain.UnloadAll();
         Raylib.UnloadShader(lit);
         Raylib.UnloadShader(ground);
         Raylib.UnloadShader(rtShadow);
@@ -112,8 +135,11 @@ static unsafe class Scene3D
     }
 
     // Call once per frame (per camera) before drawing anything 3D
-    public static void SetView(Vector3 cameraPos, float fogStart, float fogEnd, Color fog)
+    public static void SetView(Vector3 cameraPos, float fogStart, float fogEnd, Color fog, Vector3? tint = null)
     {
+        Vector3 t = tint ?? Vector3.One;
+        Raylib.SetShaderValue(lit, litTint, t, ShaderUniformDataType.Vec3);
+        Raylib.SetShaderValue(ground, groundTint, t, ShaderUniformDataType.Vec3);
         Vector2 range = new(fogStart, fogEnd);
         Vector3 fc = new(fog.R / 255f, fog.G / 255f, fog.B / 255f);
         Raylib.SetShaderValue(lit, litViewPos, cameraPos, ShaderUniformDataType.Vec3);
@@ -133,24 +159,39 @@ static unsafe class Scene3D
     // Covers a disc around `centre`; the scene must have been sent with RayTracing.Upload.
     public static void RayShadows(Vector2 centre, float radius)
     {
-        if (!RayTracing.Enabled) return;
+        if (!BeginRayShadows()) return;
+        Disc(centre, radius, radius, new Vector2(1, 0), Color.Black, 48);
+        EndRayShadows();
+    }
+
+    // Same, over whatever is drawn between Begin and End (the race draws the road footprint;
+    // the land shades its own shadows)
+    public static bool BeginRayShadows()
+    {
+        if (!RayTracing.Enabled) return false;
         Rlgl.DrawRenderBatchActive();
         Raylib.BeginShaderMode(rtShadow);
-        Disc(centre, radius, radius, new Vector2(1, 0), Color.Black, 48);
+        return true;
+    }
+
+    public static void EndRayShadows()
+    {
         Rlgl.DrawRenderBatchActive();
         Raylib.BeginShaderMode(ground);
     }
 
     // ---------------------------------------------------------------- ground pass
-    // Flat things on the ground (grass, track, kerbs, skid marks, shadows) are all at height 0.
-    // They are drawn first, in order, without the depth buffer, so they can never flicker
-    // against each other; everything standing on top is drawn afterwards with depth.
+    // Flat things on the ground (track, kerbs, skid marks, shadows) follow the land just above it.
+    // They are drawn in order without writing depth, so they can never flicker against each other;
+    // they are still depth-tested against the land, so hills hide the road behind them.
+    // Without land (the showroom) there is no depth test at all, as before.
 
     public static void BeginGround()
     {
         Rlgl.DrawRenderBatchActive();
         Raylib.BeginShaderMode(ground);
-        Rlgl.DisableDepthTest();
+        if (Ground == null) Rlgl.DisableDepthTest();
+        else Rlgl.DisableDepthMask();
         Rlgl.DisableBackfaceCulling();
     }
 
@@ -159,7 +200,21 @@ static unsafe class Scene3D
         Rlgl.DrawRenderBatchActive();
         Raylib.EndShaderMode();
         Rlgl.EnableDepthTest();
+        Rlgl.EnableDepthMask();
         Rlgl.EnableBackfaceCulling();
+    }
+
+    // Flat-coloured 3D geometry with fog (grandstand, flags, birds): depth on, like models
+    public static void BeginFlat()
+    {
+        Rlgl.DrawRenderBatchActive();
+        Raylib.BeginShaderMode(ground);
+    }
+
+    public static void EndFlat()
+    {
+        Rlgl.DrawRenderBatchActive();
+        Raylib.EndShaderMode();
     }
 
     public static void Quad(Vector2 a, Vector2 b, Vector2 c, Vector2 d, Color color, float y = 0)
@@ -196,7 +251,11 @@ static unsafe class Scene3D
         Rlgl.End();
     }
 
-    static void V(Vector2 p, float y) => Rlgl.Vertex3f(p.X, y, p.Y);
+    static void V(Vector2 p, float y)
+    {
+        if (Ground != null) y += Ground.HeightAt(p) + DecalLift;
+        Rlgl.Vertex3f(p.X, y, p.Y);
+    }
 
     // Soft blob shadow under a car, nudged away from the sun.
     // With ray tracing the sun shadow is traced, so only the dark contact patch under the car stays.
@@ -221,6 +280,7 @@ static unsafe class Scene3D
     public struct CarPose
     {
         public Vector2 Position;
+        public float Y;           // height of the ground under the car
         public float Heading;     // radians, game convention
         public float Steer;       // -1..1
         public float WheelSpin;   // radians
@@ -234,7 +294,7 @@ static unsafe class Scene3D
     {
         CarModels m = cars[type];
         float s = UnitsPerMetre * scale;
-        Vector3 pos = W(pose.Position);
+        Vector3 pos = W(pose.Position, pose.Y);
         Vector3 up = Vector3.UnitY;
         float yaw = -pose.Heading * 180f / MathF.PI;
         Vector3 scl = new(s, s, s);
@@ -285,24 +345,46 @@ static unsafe class Scene3D
             float side = i % 2 == 0 ? -1 : 1;
             Vector2 p = pose.Position + f * (front ? 1 : -1) * m.Wheelbase / 2 * s + r * side * m.Track / 2 * s;
             float wheelYaw = -(pose.Heading + (front ? pose.Steer * 0.42f : 0)) * 180f / MathF.PI;
-            Raylib.DrawModelEx(w, W(p, m.WheelRadius * s), up, wheelYaw, wScale, Color.White);
+            float gy = Ground != null ? Ground.HeightAt(p) : pose.Y;
+            Raylib.DrawModelEx(w, W(p, gy + m.WheelRadius * s), up, wheelYaw, wScale, Color.White);
         }
     }
 
-    public static void DrawTree(Vector2 pos, float size, float shade, int variant)
+    // Trees sway gently in the wind, each with its own rhythm
+    public static void DrawTree(Vector2 pos, float size, float shade, int variant, float y = 0)
     {
         Model m = variant % 2 == 0 ? pine : round;
         float s = size / 26f * UnitsPerMetre;
         byte k = (byte)Math.Clamp(255 * shade, 0, 255);
+        float t = (float)Raylib.GetTime();
+        float gust = 0.6f + 0.4f * MathF.Sin(t * 0.37f + pos.X * 0.0013f);
+        float sx = MathF.Sin(t * 1.3f + variant * 0.71f) * 0.022f * gust, sz = MathF.Sin(t * 1.05f + variant * 1.37f) * 0.016f * gust;
+        m.Transform = Raymath.MatrixMultiply(Raymath.MatrixRotateX(sx), Raymath.MatrixRotateZ(sz));
         Reflect(0);
-        Raylib.DrawModelEx(m, W(pos), Vector3.UnitY, variant * 47 % 360, new Vector3(s, s, s), new Color(k, k, k, (byte)255));
+        Raylib.DrawModelEx(m, W(pos, y), Vector3.UnitY, variant * 47 % 360, new Vector3(s, s, s), new Color(k, k, k, (byte)255));
     }
 
-    public static void DrawGantry(Vector2 pos, float heading)
+    public static void DrawGantry(Vector2 pos, float heading, float y = 0)
     {
         float s = UnitsPerMetre;
         Reflect(0.25f);
-        Raylib.DrawModelEx(gantry, W(pos), Vector3.UnitY, -heading * 180f / MathF.PI, new Vector3(s, s, s), Color.White);
+        Raylib.DrawModelEx(gantry, W(pos, y), Vector3.UnitY, -heading * 180f / MathF.PI, new Vector3(s, s, s), Color.White);
+    }
+
+    // A unit shape placed by a full transform (scale, then rotations, then position)
+    public static void DrawShape(Model shape, Matrix4x4 transform, Color color, float reflect = 0)
+    {
+        Reflect(reflect);
+        shape.Transform = transform;
+        Raylib.DrawModel(shape, Vector3.Zero, 1, color);
+    }
+
+    // Chains transforms: the first one is applied first
+    public static Matrix4x4 Xf(params Matrix4x4[] steps)
+    {
+        Matrix4x4 m = Raymath.MatrixIdentity();
+        foreach (Matrix4x4 step in steps) m = Raymath.MatrixMultiply(m, step);
+        return m;
     }
 
     public static void DrawPlatform(Vector3 pos, float radius, float height, Color color)
@@ -345,6 +427,7 @@ uniform vec2 fogRange;
 uniform float reflectivity;
 uniform float texBlur;  // head car: blur the side-projected photo where the surface turns away from the side
 uniform vec3 texSide;   // the car's sideways axis
+uniform vec3 tint;      // the track's light colour
 " + RayTracing.Glsl + RayTracing.ReflectGlsl + @"
 out vec4 finalColor;
 void main() {
@@ -365,6 +448,7 @@ void main() {
         float fresnel = 0.12 + 0.88 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
         col = mix(col, rtReflection(fragPos + n * 0.06, reflect(-v, n)), reflectivity * fresnel);
     }
+    col *= tint;
     float f = clamp((length(viewPos - fragPos) - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
     finalColor = vec4(mix(col, fogColor, f), colDiffuse.a);
 }";
@@ -388,10 +472,11 @@ in vec3 worldPos;
 uniform vec3 viewPos;
 uniform vec3 fogColor;
 uniform vec2 fogRange;
+uniform vec3 tint;
 out vec4 finalColor;
 void main() {
     float f = clamp((length(viewPos - worldPos) - fogRange.x) / (fogRange.y - fogRange.x), 0.0, 1.0);
-    finalColor = vec4(mix(fragColor.rgb, fogColor, f), fragColor.a);
+    finalColor = vec4(mix(fragColor.rgb * tint, fogColor, f), fragColor.a);
 }";
 }
 
@@ -416,6 +501,7 @@ static class Showcase
         float u = Scene3D.UnitsPerMetre;
         var cam = new Camera3D(new Vector3(0, 2.7f * u, 7.4f * u), new Vector3(0, 0.55f * u, 0), Vector3.UnitY, 30, CameraProjection.Perspective);
 
+        Scene3D.Ground = null; // the turntable is flat
         Raylib.BeginTextureMode(target);
         Raylib.ClearBackground(new Color(0, 0, 0, 0));
         Raylib.BeginMode3D(cam);

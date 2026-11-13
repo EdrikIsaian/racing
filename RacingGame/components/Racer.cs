@@ -29,6 +29,11 @@ class Racer
     // 3D look only: wheel rotation and body lean on its springs
     float wheelSpin, roll, pitch;
 
+    // The ground under the car: height, how it tilts the car, and the climb along the heading
+    public float Y, Slope;
+    float slopePitch, slopeRoll;
+    bool groundInit;
+
     public Racer(string name, Car car, Color color, bool isPlayer)
     {
         Name = name;
@@ -109,16 +114,33 @@ class Racer
         pitch += (pitchTarget - pitch) * k;
     }
 
+    // Follows the land: samples the ground at the four sides of the car
+    public void UpdateGround(Track track, float dt)
+    {
+        Vector2 p = Movement.Position, f = Movement.Forward, r = Movement.Right;
+        const float half = 13, side = 8;
+        float hf = track.HeightAt(p + f * half), hb = track.HeightAt(p - f * half);
+        float hl = track.HeightAt(p - r * side), hr = track.HeightAt(p + r * side);
+        Y = (hf + hb + hl + hr) / 4;
+        Slope = (hf - hb) / (2 * half);
+        float wantPitch = MathF.Atan(Slope), wantRoll = MathF.Atan((hl - hr) / (2 * side));
+        float k = groundInit ? 1 - MathF.Exp(-14f * dt) : 1;
+        slopePitch += (wantPitch - slopePitch) * k;
+        slopeRoll += (wantRoll - slopeRoll) * k;
+        groundInit = true;
+    }
+
     public void Draw()
     {
         Scene3D.DrawCar(Car.Type, new Scene3D.CarPose
         {
             Position = Movement.Position,
+            Y = Y,
             Heading = Movement.Heading,
             Steer = LastSteer,
             WheelSpin = wheelSpin,
-            Roll = roll,
-            Pitch = pitch,
+            Roll = roll + slopeRoll,
+            Pitch = pitch + slopePitch,
             Braking = Braking,
         }, Color);
     }

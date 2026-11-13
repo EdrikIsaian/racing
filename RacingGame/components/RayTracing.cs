@@ -22,10 +22,12 @@ static class RayTracing
     static readonly Vector4[] boxB = new Vector4[MaxBoxes]; // half size xyz, -sin(yaw)
     static readonly Vector4[] boxC = new Vector4[MaxBoxes]; // colour rgb
     static readonly Vector4[] trees = new Vector4[MaxTrees]; // x, z, scale (negative = pine), yaw
+    static readonly float[] treeY = new float[MaxTrees];     // ground height under each tree
     static int boxCount, treeCount;
     static Vector3 groundColor;
+    static float groundY;
 
-    record struct Bound(Shader Shader, int On, int BoxCount, int BoxA, int BoxB, int BoxC, int TreeCount, int Trees, int Ground);
+    record struct Bound(Shader Shader, int On, int BoxCount, int BoxA, int BoxB, int BoxC, int TreeCount, int Trees, int TreeY, int Ground, int GroundY);
     static readonly List<Bound> shaders = new();
 
     // Proxy sizes in metres, from CARS in blender/build_models.py
@@ -49,16 +51,18 @@ static class RayTracing
             Raylib.GetShaderLocation(s, "boxCount"), Raylib.GetShaderLocation(s, "boxA"),
             Raylib.GetShaderLocation(s, "boxB"), Raylib.GetShaderLocation(s, "boxC"),
             Raylib.GetShaderLocation(s, "treeCount"), Raylib.GetShaderLocation(s, "trees"),
-            Raylib.GetShaderLocation(s, "rtGround")));
+            Raylib.GetShaderLocation(s, "treeY"),
+            Raylib.GetShaderLocation(s, "rtGround"), Raylib.GetShaderLocation(s, "rtGroundY")));
     }
 
     public static void Unbind() => shaders.Clear();
 
-    // `ground`: what the floor looks like in reflections
-    public static void Begin(Color ground)
+    // `ground`: what the floor looks like in reflections; `floorY`: its height (a flat plane near the camera's subject)
+    public static void Begin(Color ground, float floorY = 0)
     {
         boxCount = treeCount = 0;
         groundColor = new Vector3(ground.R, ground.G, ground.B) / 255f;
+        groundY = floorY;
     }
 
     public static bool TreesFull => treeCount >= MaxTrees;
@@ -74,57 +78,58 @@ static class RayTracing
     }
 
     // Box given in a model's own space (metres; x forward, y up, z right), placed like DrawModelEx would
-    static void AddModelBox(Vector2 pos, float yaw, float scale, Vector3 centre, Vector3 half, Color color)
+    static void AddModelBox(Vector2 pos, float yaw, float scale, Vector3 centre, Vector3 half, Color color, float y = 0)
     {
         float c = MathF.Cos(yaw), s = MathF.Sin(yaw);
-        Vector3 world = new(pos.X + (centre.X * c + centre.Z * s) * scale, centre.Y * scale, pos.Y + (-centre.X * s + centre.Z * c) * scale);
+        Vector3 world = new(pos.X + (centre.X * c + centre.Z * s) * scale, y + centre.Y * scale, pos.Y + (-centre.X * s + centre.Z * c) * scale);
         AddBox(world, half * scale, yaw, color);
     }
 
-    public static void AddCar(CarType type, Vector2 pos, float heading, Color paint, float scale = 1)
+    public static void AddCar(CarType type, Vector2 pos, float heading, Color paint, float scale = 1, float y = 0)
     {
         float s = Scene3D.UnitsPerMetre * scale, yaw = -heading;
         if (type == CarType.HeadCar)
         {
-            foreach (var (centre, half) in HeadCar.Proxy) AddModelBox(pos, yaw, s, centre, half, HeadCar.Skin);
+            foreach (var (centre, half) in HeadCar.Proxy) AddModelBox(pos, yaw, s, centre, half, HeadCar.Skin, y);
             return;
         }
         if (type == CarType.BurgerCar)
         {
-            foreach (var (centre, half, colour) in BurgerCar.Proxy) AddModelBox(pos, yaw, s, centre, half, colour);
+            foreach (var (centre, half, colour) in BurgerCar.Proxy) AddModelBox(pos, yaw, s, centre, half, colour, y);
             return;
         }
         CarProxy p = proxies[type];
         // Lower body (starts at the ground clearance so the ground under the car is outside it)
-        AddModelBox(pos, yaw, s, new(0, (p.Clearance + p.Top - 0.03f) / 2, 0), new(p.L / 2, (p.Top - 0.03f - p.Clearance) / 2, p.W / 2), paint);
+        AddModelBox(pos, yaw, s, new(0, (p.Clearance + p.Top - 0.03f) / 2, 0), new(p.L / 2, (p.Top - 0.03f - p.Clearance) / 2, p.W / 2), paint, y);
         // Cabin: the roof's footprint, which sits inside the sloped glass
         float x0 = p.CabX0 + p.Rake * 0.45f, x1 = p.CabX1 - p.Rake * 0.55f, zBase = p.Top - 0.08f;
         float halfW = p.W / 2 - 0.12f - p.Taper;
-        AddModelBox(pos, yaw, s, new((x0 + x1) / 2, (zBase + p.Roof) / 2, 0), new((x1 - x0) / 2, (p.Roof - zBase) / 2, halfW), Glass);
+        AddModelBox(pos, yaw, s, new((x0 + x1) / 2, (zBase + p.Roof) / 2, 0), new((x1 - x0) / 2, (p.Roof - zBase) / 2, halfW), Glass, y);
         if (p.WingHeight > 0)
         {
             float span = type == CarType.HyperCar ? p.W - 0.06f : p.W - 0.2f;
-            AddModelBox(pos, yaw, s, new(-p.L / 2 + 0.25f, p.WingHeight, 0), new(p.WingChord / 2, 0.03f, span / 2), Trim);
+            AddModelBox(pos, yaw, s, new(-p.L / 2 + 0.25f, p.WingHeight, 0), new(p.WingChord / 2, 0.03f, span / 2), Trim, y);
         }
     }
 
     // Matches build_gantry() in blender/build_models.py
-    public static void AddGantry(Vector2 pos, float heading)
+    public static void AddGantry(Vector2 pos, float heading, float y = 0)
     {
         float s = Scene3D.UnitsPerMetre, yaw = -heading;
         const float span = 19f, height = 6.6f;
-        AddModelBox(pos, yaw, s, new(0, height / 2, -span / 2), new(0.3f, height / 2, 0.3f), Steel);
-        AddModelBox(pos, yaw, s, new(0, height / 2, span / 2), new(0.3f, height / 2, 0.3f), Steel);
-        AddModelBox(pos, yaw, s, new(0, height, 0), new(0.35f, 0.35f, span / 2 + 0.3f), Steel);
-        AddModelBox(pos, yaw, s, new(0, height - 0.95f, 0), new(0.125f, 0.6f, span * 0.31f), Banner);
+        AddModelBox(pos, yaw, s, new(0, height / 2, -span / 2), new(0.3f, height / 2, 0.3f), Steel, y);
+        AddModelBox(pos, yaw, s, new(0, height / 2, span / 2), new(0.3f, height / 2, 0.3f), Steel, y);
+        AddModelBox(pos, yaw, s, new(0, height, 0), new(0.35f, 0.35f, span / 2 + 0.3f), Steel, y);
+        AddModelBox(pos, yaw, s, new(0, height - 0.95f, 0), new(0.125f, 0.6f, span * 0.31f), Banner, y);
     }
 
     // Same placement as Scene3D.DrawTree
-    public static void AddTree(Vector2 pos, float size, int variant)
+    public static void AddTree(Vector2 pos, float size, int variant, float y = 0)
     {
         if (treeCount >= MaxTrees) return;
         float s = size / 26f * Scene3D.UnitsPerMetre;
         float yaw = variant * 47 % 360 * MathF.PI / 180f;
+        treeY[treeCount] = y;
         trees[treeCount++] = new Vector4(pos.X, pos.Y, variant % 2 == 0 ? -s : s, yaw);
     }
 
@@ -136,13 +141,18 @@ static class RayTracing
             Raylib.SetShaderValue(b.Shader, b.BoxCount, boxCount, ShaderUniformDataType.Int);
             Raylib.SetShaderValue(b.Shader, b.TreeCount, treeCount, ShaderUniformDataType.Int);
             if (b.Ground >= 0) Raylib.SetShaderValue(b.Shader, b.Ground, groundColor, ShaderUniformDataType.Vec3);
+            if (b.GroundY >= 0) Raylib.SetShaderValue(b.Shader, b.GroundY, groundY, ShaderUniformDataType.Float);
             if (boxCount > 0)
             {
                 Raylib.SetShaderValueV(b.Shader, b.BoxA, boxA, ShaderUniformDataType.Vec4, boxCount);
                 Raylib.SetShaderValueV(b.Shader, b.BoxB, boxB, ShaderUniformDataType.Vec4, boxCount);
                 Raylib.SetShaderValueV(b.Shader, b.BoxC, boxC, ShaderUniformDataType.Vec4, boxCount);
             }
-            if (treeCount > 0) Raylib.SetShaderValueV(b.Shader, b.Trees, trees, ShaderUniformDataType.Vec4, treeCount);
+            if (treeCount > 0)
+            {
+                Raylib.SetShaderValueV(b.Shader, b.Trees, trees, ShaderUniformDataType.Vec4, treeCount);
+                if (b.TreeY >= 0) Raylib.SetShaderValueV(b.Shader, b.TreeY, treeY, ShaderUniformDataType.Float, treeCount);
+            }
         }
     }
 
@@ -160,6 +170,7 @@ uniform vec4 boxB[MAX_BOXES];
 uniform vec4 boxC[MAX_BOXES];
 uniform int treeCount;
 uniform vec4 trees[MAX_TREES];
+uniform float treeY[MAX_TREES];
 
 const float NO_HIT = 1e9;
 const float SUN_RADIUS = 0.03; // radians; bigger than the real sun for nicer soft shadows
@@ -264,9 +275,10 @@ float rtBoxRadius(int i) { return length(boxB[i].xz); }
 // Tree i, built from the same parts as build_trees() in blender/build_models.py
 float rtTree(vec3 ro, vec3 rd, int i, inout vec3 nrm, inout vec3 alb) {
     vec4 T = trees[i];
-    if (!rtColumn(ro, rd, T.xy, 0.0, rtTreeHeight(T), rtTreeRadius(T))) return NO_HIT;
+    float ty = treeY[i];
+    if (!rtColumn(ro, rd, T.xy, ty, ty + rtTreeHeight(T), rtTreeRadius(T))) return NO_HIT;
     float s = abs(T.z), c = cos(T.w), sn = -sin(T.w);
-    vec3 o = (ro - vec3(T.x, 0.0, T.y)) / s;
+    vec3 o = (ro - vec3(T.x, ty, T.y)) / s;
     vec2 oxz = rtRot(o.xz, c, sn), dxz = rtRot(rd.xz, c, sn);
     vec3 lo = vec3(oxz.x, o.y, oxz.y), ld = vec3(dxz.x, rd.y, dxz.y);
     float best = NO_HIT, t;
@@ -319,7 +331,7 @@ float rtShadow(vec3 p, vec3 n) {
     }
     for (int i = 0; i < treeCount; i++) {
         vec4 T = trees[i];
-        if (rtColumn(ro, L, T.xy, 0.0, rtTreeHeight(T), rtTreeRadius(T) + SOFT_MARGIN)) {
+        if (rtColumn(ro, L, T.xy, treeY[i], treeY[i] + rtTreeHeight(T), rtTreeRadius(T) + SOFT_MARGIN)) {
             if (i < 32) treeLo |= 1u << uint(i); else treeHi |= 1u << uint(i - 32);
         }
     }
@@ -354,6 +366,7 @@ float rtShadow(vec3 p, vec3 n) {
     // Reflection tracing; pasted into the lit shader after Glsl (uses its fog uniforms).
     public const string ReflectGlsl = @"
 uniform vec3 rtGround;
+uniform float rtGroundY;
 
 vec3 rtSky(vec3 d) {
     vec3 sky = mix(vec3(0.769, 0.839, 0.894), vec3(0.361, 0.580, 0.839), smoothstep(0.0, 0.55, d.y));
@@ -374,7 +387,7 @@ vec3 rtReflection(vec3 ro, vec3 rd) {
     }
     bool ground = false;
     if (rd.y < -1e-4) {
-        t = -ro.y / rd.y;
+        t = (rtGroundY - ro.y) / rd.y;
         if (t > 0.0 && t < best) { best = t; nrm = vec3(0.0, 1.0, 0.0); alb = rtGround; ground = true; }
     }
     if (best >= NO_HIT) return rtSky(rd);

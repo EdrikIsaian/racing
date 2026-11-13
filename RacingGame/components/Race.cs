@@ -4,7 +4,8 @@ using Raylib_cs;
 // One race: the track, all racers, the countdown, collisions and the camera.
 class Race
 {
-    public readonly Track Track = new();
+    public readonly Track Track;
+    public TrackDef Def => Track.Def;
     public readonly List<Racer> Racers = new();
     public readonly Racer Player;
     public readonly int Laps;
@@ -36,8 +37,15 @@ class Race
     float crashCooldown;
     public Camera3D Camera => camera;
 
-    public Race(Car car, int opponents, int laps, float skill, bool manualGears = false)
+    // RACING_AUTOPILOT=1: the computer drives the player's car too (for screenshot runs)
+    static readonly bool Autopilot = Environment.GetEnvironmentVariable("RACING_AUTOPILOT") == "1";
+
+    public Race(TrackDef def, Car car, int opponents, int laps, float skill, bool manualGears = false)
     {
+        Track = Track.Get(def);
+        Track.EnsureWorld();
+        Scene3D.FogStart = def.FogStart;
+        Scene3D.FogEnd = def.FogEnd;
         Laps = laps;
         var rng = new Random();
 
@@ -57,6 +65,7 @@ class Race
         Player.PlaceOnGrid(Track, slot);
         Racers.Add(Player);
 
+        foreach (Racer r in Racers) r.UpdateGround(Track, 1);
         camYaw = Player.Movement.Heading;
         camera = new Camera3D(Vector3.Zero, Vector3.Zero, Vector3.UnitY, 55, CameraProjection.Perspective);
         UpdateCamera(1f);
@@ -73,7 +82,8 @@ class Race
             DriverInput input = default;
             if (Started)
             {
-                if (r.IsPlayer && !r.Finished) input = ReadPlayerInput(dt);
+                if (r.IsPlayer && !r.Finished && Autopilot) input = (r.Ai ??= new AiDriver(0.9f, 0)).GetInput(r, Track, dt);
+                else if (r.IsPlayer && !r.Finished) input = ReadPlayerInput(dt);
                 else if (r.Ai != null) input = r.Ai.GetInput(r, Track, dt);
             }
             else if (r.IsPlayer)
@@ -81,6 +91,7 @@ class Race
                 // Rev the engine on the grid (the car stays put until the lights go out)
                 r.Gearbox.Update(0, r.Car.MaxSpeed * Movement.PixelsPerKmh, ReadPlayerInput(dt), dt);
                 r.LastSteer = 0;
+                r.UpdateGround(Track, dt);
                 continue;
             }
 
@@ -89,8 +100,9 @@ class Race
             r.LastThrottle = input.Throttle;
             r.Braking = input.Brake > 0 && r.Movement.ForwardSpeed > 5;
             r.Gearbox.Update(r.Movement.ForwardSpeed, r.Car.MaxSpeed * Movement.PixelsPerKmh, input, dt);
-            r.Movement.Update(r.Car, input, r.OnTrack, dt, r.Gearbox.DriveFactor);
+            r.Movement.Update(r.Car, input, r.OnTrack, dt, r.Gearbox.DriveFactor, Started ? r.Slope : 0);
             r.UpdateVisuals(input, dt);
+            r.UpdateGround(Track, dt);
 
             if (r.UpdateTrackPosition(Track, RaceTime, Laps) && r.IsPlayer)
             {
@@ -116,6 +128,7 @@ class Race
 
         UpdateCamera(dt);
         UpdateSounds(dt);
+        Track.Scenery!.Update(dt, Player.Movement.Position);
     }
 
     // One-shot race sounds: start beeps, gear changes, crashes, lap chimes
@@ -150,7 +163,7 @@ class Race
         {
             Racer r = Racers[i];
             Movement m = r.Movement;
-            Vector3 d = Scene3D.W(m.Position, 8) - camera.Position;
+            Vector3 d = Scene3D.W(m.Position, r.Y + 8) - camera.Position;
             float dist = d.Length();
             float topSpeed = r.Car.MaxSpeed * Movement.PixelsPerKmh;
             float speedRatio = Math.Clamp(m.Velocity.Length() / topSpeed, 0, 1);
@@ -268,8 +281,14 @@ class Race
 
         float distance = 74 + 26 * speedRatio;
         float height = 29 + 5 * speedRatio;
-        Vector3 wantPos = Scene3D.W(m.Position - dir * distance, height);
-        Vector3 wantTarget = Scene3D.W(m.Position + dir * 46, 9);
+        Vector2 back = m.Position - dir * distance, ahead = m.Position + dir * 46;
+        float y = Player.Y;
+        // Stay above the car, and above the ground behind it in dips
+        float camY = MathF.Max(y + height, Track.HeightAt(back) + 14);
+        // Look a little down over crests and up into climbs
+        float aheadY = y + (Track.HeightAt(m.Position + dir * 140) - y) * 0.35f;
+        Vector3 wantPos = Scene3D.W(back, camY);
+        Vector3 wantTarget = Scene3D.W(ahead, aheadY + 9);
 
         float t = 1 - MathF.Exp(-14f * dt);
         camera.Position = Vector3.Lerp(camera.Position, wantPos, t);
@@ -291,28 +310,42 @@ class Race
 
     public void Draw()
     {
-        // Sky
+        // Sky, with clouds painted on it
         int sw = Raylib.GetScreenWidth(), sh = Raylib.GetScreenHeight();
-        Raylib.ClearBackground(Scene3D.Horizon);
-        Raylib.DrawRectangleGradientV(0, 0, sw, sh / 2, Scene3D.SkyTop, Scene3D.Horizon);
+        Raylib.ClearBackground(Def.Horizon);
+        Raylib.DrawRectangleGradientV(0, 0, sw, sh / 2, Def.SkyTop, Def.Horizon);
+        Scenery scenery = Track.Scenery!;
+        scenery.DrawSky(camera);
 
         Raylib.BeginMode3D(camera);
-        Scene3D.SetView(camera.Position, Scene3D.FogStart, Scene3D.FogEnd, Scene3D.Horizon);
+        Scene3D.Ground = Track.Terrain;
+        Scene3D.SetView(camera.Position, Scene3D.FogStart, Scene3D.FogEnd, Def.Horizon, Def.Tint);
+        Vector3 forward = camera.Target - camera.Position;
 
         // Shapes the ray tracer casts shadows and reflections from
-        RayTracing.Begin(new Color(62, 64, 70, 255));
-        foreach (Racer r in Racers) RayTracing.AddCar(r.Car.Type, r.Movement.Position, r.Movement.Heading, r.Color);
-        Track.AddRayCasters(camera.Position, camera.Target - camera.Position);
+        RayTracing.Begin(new Color(62, 64, 70, 255), Player.Y);
+        foreach (Racer r in Racers) RayTracing.AddCar(r.Car.Type, r.Movement.Position, r.Movement.Heading, r.Color, 1, r.Y);
+        Track.AddRayCasters(camera.Position, forward);
         RayTracing.Upload();
 
+        // The land (and lakes), then the road and everything flat on it
+        Track.Terrain!.Draw(camera.Position, Def.Horizon);
         Scene3D.BeginGround();
         Track.DrawGround();
         skidMarks.Draw();
         foreach (Racer r in Racers) Scene3D.CarShadow(r.Movement.Position, r.Movement.Heading, r.Car.Type);
-        Scene3D.RayShadows(new Vector2(camera.Position.X, camera.Position.Z), Scene3D.FogEnd + 500);
+        if (Scene3D.BeginRayShadows())
+        {
+            Track.DrawRoadFootprint();
+            Scene3D.EndRayShadows();
+        }
         Scene3D.EndGround();
 
-        Track.DrawScenery(camera.Position, camera.Target - camera.Position);
+        Track.DrawScenery(camera.Position, forward);
+        scenery.DrawModels(camera.Position, forward);
+        Scene3D.BeginFlat();
+        scenery.DrawFlat(camera.Position, Player.Movement.Position);
+        Scene3D.EndFlat();
         foreach (Racer r in Racers) r.Draw();
         Raylib.EndMode3D();
         Supersample.Setup2D();
@@ -332,7 +365,7 @@ class Race
         foreach (Racer r in Racers)
         {
             if (r.IsPlayer) continue;
-            Vector3 p = Scene3D.W(r.Movement.Position, 24);
+            Vector3 p = Scene3D.W(r.Movement.Position, r.Y + 24);
             Vector3 d = p - camera.Position;
             float dist = d.Length();
             if (Vector3.Dot(d, forward) < 10 || dist > 2600) continue; // behind the camera or too far
