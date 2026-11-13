@@ -68,6 +68,7 @@ class Race
 
             r.OnTrack = Track.IsOnTrack(r.Movement.Position, r.TrackIndex);
             r.LastSteer = input.Steer;
+            r.Braking = input.Brake > 0 && r.Movement.ForwardSpeed > 5;
             r.Movement.Update(r.Car, input, r.OnTrack, dt);
 
             if (r.UpdateTrackPosition(Track, RaceTime, Laps) && r.IsPlayer)
@@ -193,32 +194,45 @@ class Race
 
     public void Draw()
     {
-        Raylib.ClearBackground(new Color(70, 140, 60, 255));
+        Raylib.ClearBackground(new Color(66, 116, 58, 255));
         Raylib.BeginMode2D(camera);
+        Rectangle view = VisibleWorld();
         DrawGrass();
-        Track.Draw();
-        skidMarks.Draw();
+        Track.Draw(view);
+        skidMarks.Draw(view);
         foreach (Racer r in Racers) r.Draw();
+        foreach (Racer r in Racers) r.DrawNameTag();
         Raylib.EndMode2D();
 
+        Ui.Vignette(0.55f);
         Ui.BeginHud();
         Hud.Draw(this);
         Ui.End();
     }
 
-    // Checkerboard grass so you can feel your speed even off the track.
+    // The part of the world the camera can currently see
+    Rectangle VisibleWorld()
+    {
+        Vector2 a = Raylib.GetScreenToWorld2D(Vector2.Zero, camera);
+        Vector2 b = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), camera);
+        return new Rectangle(a.X, a.Y, b.X - a.X, b.Y - a.Y);
+    }
+
+    // Mowed-lawn plaid: light/dark stripes in both directions so you can feel your speed anywhere.
     void DrawGrass()
     {
-        const int tile = 160;
+        const int band = 150;
         Vector2 topLeft = Raylib.GetScreenToWorld2D(Vector2.Zero, camera);
         Vector2 bottomRight = Raylib.GetScreenToWorld2D(new Vector2(Raylib.GetScreenWidth(), Raylib.GetScreenHeight()), camera);
-        int x0 = (int)MathF.Floor(topLeft.X / tile), x1 = (int)MathF.Ceiling(bottomRight.X / tile);
-        int y0 = (int)MathF.Floor(topLeft.Y / tile), y1 = (int)MathF.Ceiling(bottomRight.Y / tile);
-        Color dark = new Color(63, 128, 54, 255);
+        int x0 = (int)MathF.Floor(topLeft.X / band), x1 = (int)MathF.Ceiling(bottomRight.X / band);
+        int y0 = (int)MathF.Floor(topLeft.Y / band), y1 = (int)MathF.Ceiling(bottomRight.Y / band);
+        int top = y0 * band, height = (y1 - y0 + 1) * band;
+        int left = x0 * band, width = (x1 - x0 + 1) * band;
+        Color stripe = new(0, 0, 0, 16);
         for (int x = x0; x <= x1; x++)
-            for (int y = y0; y <= y1; y++)
-                if (((x + y) & 1) == 0)
-                    Raylib.DrawRectangle(x * tile, y * tile, tile, tile, dark);
+            if ((x & 1) == 0) Raylib.DrawRectangle(x * band, top, band, height, stripe);
+        for (int y = y0; y <= y1; y++)
+            if ((y & 1) == 0) Raylib.DrawRectangle(left, y * band, width, band, stripe);
     }
 }
 
@@ -238,10 +252,16 @@ class SkidMarks
         count = Math.Min(count + 1, Max);
     }
 
-    public void Draw()
+    public void Draw(Rectangle view)
     {
-        Color c = new Color(25, 25, 25, 110);
+        Color c = new Color(20, 20, 22, 95);
+        float x0 = view.X - 4, y0 = view.Y - 4, x1 = view.X + view.Width + 4, y1 = view.Y + view.Height + 4;
         for (int i = 0; i < count; i++)
-            Raylib.DrawLineEx(starts[i], ends[i], 4, c);
+        {
+            Vector2 a = starts[i], b = ends[i];
+            if (MathF.Max(a.X, b.X) < x0 || MathF.Min(a.X, b.X) > x1 || MathF.Max(a.Y, b.Y) < y0 || MathF.Min(a.Y, b.Y) > y1)
+                continue; // off screen
+            Raylib.DrawLineEx(a, b, 4, c);
+        }
     }
 }
