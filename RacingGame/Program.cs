@@ -36,20 +36,29 @@ UpdateFpsCap();
 Game game = new Game();
 if (int.TryParse(Environment.GetEnvironmentVariable("RACING_CAR"), out int carNo)) game.PickCar(carNo - 1); // RACING_CAR=5: start on car 5
 if (int.TryParse(Environment.GetEnvironmentVariable("RACING_TRACK"), out int trackNo)) game.PickTrack(trackNo - 1); // RACING_TRACK=2: second track
+// RACING_NET=host or RACING_NET=join:<address> opens a room / joins one straight away (test runs);
+// RACING_NET_START=2 makes the host start the race once that many players are in
+string? netMode = Environment.GetEnvironmentVariable("RACING_NET");
+if (netMode != null) game.AutoNet(netMode, int.TryParse(Environment.GetEnvironmentVariable("RACING_NET_START"), out int n) ? n : 0);
+string shotPrefix = Environment.GetEnvironmentVariable("RACING_SHOT_PREFIX") ?? "";
 int frame = 0;
 
 while (!Raylib.WindowShouldClose() && !game.QuitRequested)
 {
-    // F or F11 switches between full screen and a normal window
-    if (Raylib.IsKeyPressed(KeyboardKey.F) || Raylib.IsKeyPressed(KeyboardKey.F11))
+    // Single-key shortcuts, unless you're typing in a text box
+    if (!TextField.AnyFocused)
     {
-        Raylib.ToggleBorderlessWindowed();
-        UpdateFpsCap();
+        // F or F11 switches between full screen and a normal window
+        if (Raylib.IsKeyPressed(KeyboardKey.F) || Raylib.IsKeyPressed(KeyboardKey.F11))
+        {
+            Raylib.ToggleBorderlessWindowed();
+            UpdateFpsCap();
+        }
+        if (Raylib.IsKeyPressed(KeyboardKey.F3)) PerfOverlay.Toggle();
+        if (Raylib.IsKeyPressed(KeyboardKey.M)) Audio.MusicMuted = !Audio.MusicMuted;
+        if (Raylib.IsKeyPressed(KeyboardKey.T)) RayTracing.Enabled = !RayTracing.Enabled;
+        if (Raylib.IsKeyPressed(KeyboardKey.G)) PostFx.Enabled = !PostFx.Enabled;
     }
-    if (Raylib.IsKeyPressed(KeyboardKey.F3)) PerfOverlay.Toggle();
-    if (Raylib.IsKeyPressed(KeyboardKey.M)) Audio.MusicMuted = !Audio.MusicMuted;
-    if (Raylib.IsKeyPressed(KeyboardKey.T)) RayTracing.Enabled = !RayTracing.Enabled;
-    if (Raylib.IsKeyPressed(KeyboardKey.G)) PostFx.Enabled = !PostFx.Enabled;
     PerfOverlay.Record(Raylib.GetFrameTime());
 
     // Time since last frame, capped so a hiccup doesn't teleport the cars
@@ -64,17 +73,19 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
     if (screenshotRun)
     {
         frame++;
-        if (frame == 60) Supersample.CaptureTo = "shot_menu.png";
-        if (frame == 61) game.StartRaceNow();
-        if (frame == 150) Supersample.CaptureTo = "shot_grid.png";
-        if (frame == 480) Supersample.CaptureTo = "shot_race.png";
-        if (frame == 1100) Supersample.CaptureTo = "shot_race2.png";
-        if (frame == 1900) Supersample.CaptureTo = "shot_race3.png";
+        if (frame == 60) Supersample.CaptureTo = shotPrefix + "shot_menu.png";
+        if (frame == 61 && netMode == null) game.StartRaceNow();
+        if (frame == 150) Supersample.CaptureTo = shotPrefix + "shot_grid.png";
+        if (frame == 480) Supersample.CaptureTo = shotPrefix + "shot_race.png";
+        if (frame == 1100) Supersample.CaptureTo = shotPrefix + "shot_race2.png";
+        if (frame == 1900) Supersample.CaptureTo = shotPrefix + "shot_race3.png";
         if (frame == 1902) break;
     }
     Supersample.End();
 }
 
+Net.Stop();
+Net.StopBrowsing();
 Supersample.Unload();
 PostFx.Unload();
 Scene3D.Unload();

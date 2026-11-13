@@ -6,11 +6,14 @@ enum GameState
     Menu,
     Racing,
     Paused,
-    Results
+    Results,
+    Multiplayer, // name, host a room, or join one
+    Lobby        // in a room, waiting for the race
 }
 
 // Switches between the menu, the race, the pause screen and the results.
-class Game
+// The multiplayer screens are in GameOnline.cs.
+partial class Game
 {
     public bool QuitRequested;
 
@@ -66,6 +69,7 @@ class Game
         menuButtons.Add(Button.Arrow(right - 16, TrackCardY + TrackCardH / 2, 28, 1, () => SelectTrack(1)));
         menuButtons.Add(new Button(SidePanel.X + 24, SidePanel.Y + SidePanel.Height - 70, SidePanel.Width - 48, 52, "START RACE", StartRace, 26, ButtonStyle.Primary));
         menuButtons.Add(new Button(1146, 28, 84, 34, "QUIT", () => QuitRequested = true, 17, ButtonStyle.Ghost));
+        menuButtons.Add(new Button(986, 28, 148, 34, "MULTIPLAYER", OpenMultiplayer, 17));
         menuButtons.Add(Button.Arrow(112, Turntable.Y, 46, -1, () => SelectCar(-1)));
         menuButtons.Add(Button.Arrow(768, Turntable.Y, 46, 1, () => SelectCar(1)));
 
@@ -75,6 +79,8 @@ class Game
 
         resultsButtons.Add(new Button(434, 622, 200, 54, "RACE AGAIN", StartRace, 22, ButtonStyle.Primary));
         resultsButtons.Add(new Button(646, 622, 200, 54, "MAIN MENU", () => state = GameState.Menu, 22));
+
+        InitOnline();
     }
 
     void AddSelector(float rightX, float rowY, Action minus, Action plus)
@@ -112,7 +118,9 @@ class Game
 
     public void Update(float dt)
     {
-        if (state == GameState.Menu) Audio.PlayMenuMusic();
+        UpdateNetwork(dt);
+
+        if (state is GameState.Menu or GameState.Multiplayer or GameState.Lobby) Audio.PlayMenuMusic();
         else Audio.PlayRaceMusic();
 
         switch (state)
@@ -121,8 +129,17 @@ class Game
                 UpdateMenu();
                 break;
 
+            case GameState.Multiplayer:
+                UpdateMultiplayer();
+                break;
+
+            case GameState.Lobby:
+                UpdateLobby();
+                break;
+
             case GameState.Racing:
-                race!.Update(dt);
+                race!.InputLocked = false;
+                race.Update(dt);
                 race.UpdateAudio();
                 if (Raylib.IsKeyPressed(KeyboardKey.Escape) || Raylib.IsKeyPressed(KeyboardKey.P))
                     state = GameState.Paused;
@@ -138,16 +155,28 @@ class Game
                 break;
 
             case GameState.Paused:
+                if (race!.Online)
+                {
+                    // Online the race can't stop for you: it carries on while you coast
+                    race.InputLocked = true;
+                    race.Update(dt);
+                    race.UpdateAudio();
+                }
                 if (Raylib.IsKeyPressed(KeyboardKey.Escape) || Raylib.IsKeyPressed(KeyboardKey.P))
                     state = GameState.Racing;
                 else
-                    foreach (Button b in pauseButtons) b.Update();
+                    foreach (Button b in race.Online ? onlinePauseButtons : pauseButtons) b.Update();
                 break;
 
             case GameState.Results:
                 race!.Update(dt); // the others keep racing behind the results screen
                 race.UpdateAudio();
-                if (Raylib.IsKeyPressed(KeyboardKey.Enter)) StartRace();
+                if (race.Online)
+                {
+                    if (Raylib.IsKeyPressed(KeyboardKey.Enter) || Raylib.IsKeyPressed(KeyboardKey.Escape)) LeaveOnlineRace();
+                    else foreach (Button b in onlineResultsButtons) b.Update();
+                }
+                else if (Raylib.IsKeyPressed(KeyboardKey.Enter)) StartRace();
                 else if (Raylib.IsKeyPressed(KeyboardKey.Escape)) state = GameState.Menu;
                 else foreach (Button b in resultsButtons) b.Update();
                 break;
@@ -208,6 +237,7 @@ class Game
     // 3D renders that go into their own images. Runs before the frame starts drawing.
     public void PreDraw()
     {
+        if (state is GameState.Multiplayer or GameState.Lobby) return;
         if (state != GameState.Menu)
         {
             race?.PreDraw();
@@ -230,6 +260,12 @@ class Game
         {
             case GameState.Menu:
                 DrawMenu();
+                break;
+            case GameState.Multiplayer:
+                DrawMultiplayer();
+                break;
+            case GameState.Lobby:
+                DrawLobby();
                 break;
             case GameState.Racing:
                 race!.Draw();
@@ -267,32 +303,7 @@ class Game
         float time = (float)Raylib.GetTime();
         showcaseT = Ui.Approach(showcaseT, 1, 7);
 
-        // Backdrop: deep graphite gradient with a glow in the car's colour
-        int sw = Raylib.GetScreenWidth(), sh = Raylib.GetScreenHeight();
-        Raylib.DrawRectangleGradientV(0, 0, sw, sh, Ui.Bg1, Ui.Bg0);
-
-        Ui.BeginMenu();
-        // dot grid
-        for (int x = 16; x < Ui.BaseWidth; x += 32)
-            for (int y = 16; y < Ui.BaseHeight; y += 32)
-                Raylib.DrawCircleSector(new Vector2(x, y), 1, 0, 360, 8, new Color(255, 255, 255, 9)); // tiny dots don't need 36 sides
-        Ui.Glow(Turntable, 470, Ui.Alpha(car.Color, 0.20f));
-        Ui.Glow(Turntable, 240, Ui.Alpha(car.Color, 0.12f));
-
-        Ui.End();
-        Ui.Vignette(0.9f);
-        Ui.BeginMenu();
-
-        // Top bar: wordmark + quit
-        for (int i = 0; i < 3; i++)
-        {
-            float bx = 80 + i * 9;
-            Raylib.DrawTriangle(new Vector2(bx + 6, 34), new Vector2(bx, 58), new Vector2(bx + 5, 58), Ui.Alpha(Ui.Accent, 1 - i * 0.28f));
-            Raylib.DrawTriangle(new Vector2(bx + 6, 34), new Vector2(bx + 5, 58), new Vector2(bx + 11, 34), Ui.Alpha(Ui.Accent, 1 - i * 0.28f));
-        }
-        Ui.DrawText("RACING", 116, 35, 28, Ui.TextColor, Typeface.Display, 0.12f);
-        Ui.DrawText("GAME", 116 + Ui.MeasureText("RACING ", 28, Typeface.Display, 0.12f), 35, 28, Ui.Muted, Typeface.Display, 0.12f);
-        Raylib.DrawLineEx(new Vector2(80, 78), new Vector2(1200, 78), 1, Ui.Stroke);
+        DrawBackdrop(Turntable, car.Color);
 
         // Showcase: name + class
         float e = 1 - MathF.Pow(1 - showcaseT, 3); // ease-out
@@ -317,6 +328,37 @@ class Game
 
         Ui.KeyHints(640, 684, new[] { ("A  D", "Choose car"), ("TAB", "Track"), ("ENTER", "Start race"), ("M", Audio.MusicMuted ? "Music off" : "Music on"), ("T", RayTracing.Enabled ? "Ray tracing on" : "Ray tracing off"), ("F", "Full screen"), ("ESC", "Quit") });
         Ui.End();
+    }
+
+    // Deep graphite gradient, dot grid, a glow in the given colour, and the top bar wordmark.
+    // Leaves the menu (1280x720) transform on.
+    static void DrawBackdrop(Vector2 glowAt, Color glow)
+    {
+        int sw = Raylib.GetScreenWidth(), sh = Raylib.GetScreenHeight();
+        Raylib.DrawRectangleGradientV(0, 0, sw, sh, Ui.Bg1, Ui.Bg0);
+
+        Ui.BeginMenu();
+        // dot grid
+        for (int x = 16; x < Ui.BaseWidth; x += 32)
+            for (int y = 16; y < Ui.BaseHeight; y += 32)
+                Raylib.DrawCircleSector(new Vector2(x, y), 1, 0, 360, 8, new Color(255, 255, 255, 9)); // tiny dots don't need 36 sides
+        Ui.Glow(glowAt, 470, Ui.Alpha(glow, 0.20f));
+        Ui.Glow(glowAt, 240, Ui.Alpha(glow, 0.12f));
+
+        Ui.End();
+        Ui.Vignette(0.9f);
+        Ui.BeginMenu();
+
+        // Top bar: wordmark
+        for (int i = 0; i < 3; i++)
+        {
+            float bx = 80 + i * 9;
+            Raylib.DrawTriangle(new Vector2(bx + 6, 34), new Vector2(bx, 58), new Vector2(bx + 5, 58), Ui.Alpha(Ui.Accent, 1 - i * 0.28f));
+            Raylib.DrawTriangle(new Vector2(bx + 6, 34), new Vector2(bx + 5, 58), new Vector2(bx + 11, 34), Ui.Alpha(Ui.Accent, 1 - i * 0.28f));
+        }
+        Ui.DrawText("RACING", 116, 35, 28, Ui.TextColor, Typeface.Display, 0.12f);
+        Ui.DrawText("GAME", 116 + Ui.MeasureText("RACING ", 28, Typeface.Display, 0.12f), 35, 28, Ui.Muted, Typeface.Display, 0.12f);
+        Raylib.DrawLineEx(new Vector2(80, 78), new Vector2(1200, 78), 1, Ui.Stroke);
     }
 
     void DrawCarTab(int i)
@@ -437,8 +479,8 @@ class Game
         Ui.GlassPanel(p, 20, new Color(14, 16, 22, (int)(235 * e)));
         Ui.LabelCentered("Race paused", 640, p.Y + 30, Ui.Alpha(Ui.Accent, e));
         Ui.TextCentered("PAUSED", 640, p.Y + 50, 58, Ui.Alpha(Ui.TextColor, e), Typeface.Display, 0.08f);
-        Ui.TextCentered($"Race time  {Ui.FormatTime(race!.RaceTime)}", 640, p.Y + 110, 13, Ui.Alpha(Ui.Muted, e), Typeface.Body);
-        foreach (Button b in pauseButtons) b.Draw();
+        Ui.TextCentered(race!.Online ? "Online race: the others keep racing" : $"Race time  {Ui.FormatTime(race.RaceTime)}", 640, p.Y + 110, 13, Ui.Alpha(Ui.Muted, e), Typeface.Body);
+        foreach (Button b in race.Online ? onlinePauseButtons : pauseButtons) b.Draw();
         Ui.KeyHints(640, 560, new[] { ("ESC", "Resume") }, e);
     }
 
@@ -477,12 +519,13 @@ class Game
         float winner = standings[0].Finished ? standings[0].FinishTime : 0;
         Color[] podium = { new(232, 186, 72, 255), new(196, 202, 214, 255), new(204, 132, 78, 255) };
 
+        float pitch = standings.Count > 6 ? 300f / standings.Count : 50; // up to 8 cars online
         for (int i = 0; i < standings.Count; i++)
         {
             Racer racer = standings[i];
             float rowE = Math.Clamp(overlayT * 1.6f - i * 0.08f, 0, 1);
-            float ry = hy + 26 + i * 50 + (1 - rowE) * 12;
-            Rectangle row = new(x0 - 12, ry, x1 - x0 + 24, 44);
+            float ry = hy + 26 + i * pitch - (50 - pitch) / 2 + (1 - rowE) * 12;
+            Rectangle row = new(x0 - 12, ry + (50 - pitch) / 2, x1 - x0 + 24, pitch - 6);
             if (racer.IsPlayer)
             {
                 Ui.RoundRect(row, 10, Ui.Alpha(Ui.Accent, 0.13f * rowE));
@@ -505,7 +548,15 @@ class Game
             Ui.TextRight(Ui.FormatTime(racer.BestLap), x1, ry + 15, 15, Ui.Alpha(isFastest ? Ui.Purple : Ui.Muted, rowE), Typeface.Bold);
         }
 
-        foreach (Button b in resultsButtons) b.Draw();
-        Ui.KeyHints(640, 690, new[] { ("ENTER", "Race again"), ("ESC", "Main menu") }, e);
+        if (r.Online)
+        {
+            foreach (Button b in onlineResultsButtons) b.Draw();
+            Ui.KeyHints(640, 690, new[] { ("ENTER", "Back to lobby") }, e);
+        }
+        else
+        {
+            foreach (Button b in resultsButtons) b.Draw();
+            Ui.KeyHints(640, 690, new[] { ("ENTER", "Race again"), ("ESC", "Main menu") }, e);
+        }
     }
 }

@@ -26,6 +26,13 @@ class Racer
     public bool Braking;
     public Vector2? LastLeftWheel, LastRightWheel; // for skid marks
 
+    // Online: the id everyone knows this car by, and whether another machine drives it
+    public int NetId = -1;
+    public bool Remote;
+    CarState net;
+    float netTime, remoteBest;
+    bool hasNet;
+
     // 3D look only: wheel rotation and body lean on its springs
     float wheelSpin, roll, pitch;
 
@@ -43,7 +50,7 @@ class Racer
         Gearbox = new Gearbox(EngineSpec.For(car.Type));
     }
 
-    public float BestLap => LapTimes.Count > 0 ? LapTimes.Min() : 0;
+    public float BestLap => Remote ? remoteBest : LapTimes.Count > 0 ? LapTimes.Min() : 0;
     public float CurrentLapTime(float raceTime) => raceTime - lapStart;
     public int CurrentLap(int totalLaps) => Math.Clamp(LapsDone + 1, 1, totalLaps);
 
@@ -90,6 +97,79 @@ class Racer
             return true;
         }
         return false;
+    }
+
+    // ---- Online
+
+    // What this machine tells the others about a car it drives
+    public CarState NetState() => new()
+    {
+        Id = NetId,
+        Position = Movement.Position,
+        Velocity = Movement.Velocity,
+        Heading = Movement.Heading,
+        Steer = LastSteer,
+        Throttle = LastThrottle,
+        Rpm = Gearbox.Rpm,
+        Gear = (byte)Gearbox.Gear,
+        Braking = Braking,
+        Skidding = Movement.IsSkidding,
+        OnTrack = OnTrack,
+        Reversing = Gearbox.Reversing,
+        Finished = Finished,
+        TrackIndex = TrackIndex,
+        ProgressSamples = ProgressSamples,
+        LapsDone = LapsDone,
+        FinishTime = FinishTime,
+        BestLap = BestLap,
+    };
+
+    // A new update for a car someone else drives. Race progress is taken as is;
+    // the position is eased towards it in UpdateRemote so the car doesn't jitter.
+    public void ApplyNetState(in CarState s, float now)
+    {
+        if (!hasNet || Vector2.DistanceSquared(s.Position, Movement.Position) > 250 * 250)
+        {
+            Movement.Position = s.Position; // first update, or reset to track: jump straight there
+            Movement.Heading = s.Heading;
+        }
+        net = s;
+        netTime = now;
+        hasNet = true;
+
+        TrackIndex = s.TrackIndex;
+        ProgressSamples = s.ProgressSamples;
+        LapsDone = s.LapsDone;
+        if (s.Finished && !Finished)
+        {
+            Finished = true;
+            FinishTime = s.FinishTime;
+        }
+        remoteBest = s.BestLap;
+        OnTrack = s.OnTrack;
+        Braking = s.Braking;
+        LastSteer = s.Steer;
+        LastThrottle = s.Throttle;
+        Movement.IsSkidding = s.Skidding;
+        Gearbox.Gear = Math.Max(1, (int)s.Gear);
+        Gearbox.Reversing = s.Reversing;
+    }
+
+    // Moves a remote car between updates: carries on at its last known velocity
+    // and drifts smoothly onto where the latest update says it should be by now.
+    public void UpdateRemote(float dt, float now)
+    {
+        if (!hasNet) return;
+        float age = now - netTime;
+        bool stale = age > 0.3f; // updates stopped: hold still instead of flying off
+        Vector2 target = net.Position + net.Velocity * MathF.Min(age, 0.3f);
+
+        Movement.Velocity = stale ? Vector2.Zero : net.Velocity;
+        Movement.Position += Movement.Velocity * dt;
+        Movement.Position += (target - Movement.Position) * (1 - MathF.Exp(-10f * dt));
+        Movement.Heading += Track.WrapAngle(net.Heading - Movement.Heading) * (1 - MathF.Exp(-16f * dt));
+        Gearbox.Rpm += (net.Rpm - Gearbox.Rpm) * (1 - MathF.Exp(-20f * dt));
+        UpdateVisuals(new DriverInput { Steer = net.Steer, Throttle = net.Throttle }, dt);
     }
 
     public (Vector2 Left, Vector2 Right) RearWheels()

@@ -1,6 +1,11 @@
 using System.Numerics;
 using Raylib_cs;
 
+enum RacerKind { Player, Ai, Remote }
+
+// One car on the starting grid, front to back
+record RaceEntry(string Name, Car Car, Color Color, RacerKind Kind, int NetId = -1);
+
 // One race: the track, all racers, the countdown, collisions and the camera.
 class Race
 {
@@ -21,8 +26,8 @@ class Race
     float camYaw;       // smoothed direction the chase camera looks along
     float playerSteer;
 
-    static readonly string[] AiNames = { "Alex", "Sam", "Riley", "Jordan", "Casey" };
-    static readonly Color[] AiColors =
+    public static readonly string[] AiNames = { "Alex", "Sam", "Riley", "Jordan", "Casey" };
+    public static readonly Color[] AiColors =
     {
         new Color(52, 120, 246, 255),
         new Color(255, 140, 0, 255),
@@ -40,7 +45,27 @@ class Race
     // RACING_AUTOPILOT=1: the computer drives the player's car too (for screenshot runs)
     static readonly bool Autopilot = Environment.GetEnvironmentVariable("RACING_AUTOPILOT") == "1";
 
+    // Online race: cars driven on other machines are synced over the network
+    public readonly bool Online;
+    public bool InputLocked; // online pause menu: the race goes on, your car just coasts
+    readonly Dictionary<int, Racer> byNetId = new();
+    readonly List<CarState> netStates = new();
+    readonly List<int> netRetired = new();
+    float sendTimer;
+
     public Race(TrackDef def, Car car, int opponents, int laps, float skill, bool manualGears = false)
+        : this(def, OfflineGrid(car, opponents), laps, skill, manualGears, false) { }
+
+    // Opponents fill the front of the grid, the player starts at the back.
+    static List<RaceEntry> OfflineGrid(Car car, int opponents)
+    {
+        var grid = new List<RaceEntry>();
+        for (int i = 0; i < opponents; i++) grid.Add(new RaceEntry(AiNames[i], car, AiColors[i], RacerKind.Ai));
+        grid.Add(new RaceEntry("You", car, car.Color, RacerKind.Player));
+        return grid;
+    }
+
+    public Race(TrackDef def, List<RaceEntry> grid, int laps, float skill, bool manualGears, bool online)
     {
         Track = Track.Get(def);
         Track.EnsureWorld();
@@ -49,21 +74,23 @@ class Race
         Laps = laps;
         var rng = new Random();
 
-        // Opponents fill the front of the grid, the player starts at the back.
-        int slot = 0;
-        for (int i = 0; i < opponents; i++)
-        {
-            var ai = new Racer(AiNames[i], car, AiColors[i], false);
-            float lane = ((float)rng.NextDouble() - 0.5f) * Track.Width * 0.4f;
-            ai.Ai = new AiDriver(skill + ((float)rng.NextDouble() - 0.5f) * 0.05f, lane);
-            ai.PlaceOnGrid(Track, slot++);
-            Racers.Add(ai);
-        }
+        Online = online;
 
-        Player = new Racer("You", car, car.Color, true);
-        Player.Gearbox.Manual = manualGears;
-        Player.PlaceOnGrid(Track, slot);
-        Racers.Add(Player);
+        for (int slot = 0; slot < grid.Count; slot++)
+        {
+            RaceEntry e = grid[slot];
+            var r = new Racer(e.Name, e.Car, e.Color, e.Kind == RacerKind.Player) { NetId = e.NetId, Remote = e.Kind == RacerKind.Remote };
+            if (e.Kind == RacerKind.Ai)
+            {
+                float lane = ((float)rng.NextDouble() - 0.5f) * Track.Width * 0.4f;
+                r.Ai = new AiDriver(skill + ((float)rng.NextDouble() - 0.5f) * 0.05f, lane);
+            }
+            if (e.Kind == RacerKind.Player) r.Gearbox.Manual = manualGears;
+            r.PlaceOnGrid(Track, slot);
+            Racers.Add(r);
+            if (e.NetId >= 0) byNetId[e.NetId] = r;
+        }
+        Player = Racers.First(r => r.IsPlayer);
 
         foreach (Racer r in Racers) r.UpdateGround(Track, 1);
         camYaw = Player.Movement.Heading;
@@ -77,8 +104,20 @@ class Race
         else RaceTime += dt;
 
         PlayerImpact = 0;
+        float now = (float)Raylib.GetTime();
+        if (Online) ReceiveNetwork(now);
+
         foreach (Racer r in Racers)
         {
+            if (r.Remote)
+            {
+                r.UpdateRemote(dt, now);
+                r.UpdateGround(Track, dt);
+                AddSkidMarks(r);
+                NoteFinish(r);
+                continue;
+            }
+
             DriverInput input = default;
             if (Started)
             {
@@ -89,8 +128,10 @@ class Race
             else if (r.IsPlayer)
             {
                 // Rev the engine on the grid (the car stays put until the lights go out)
-                r.Gearbox.Update(0, r.Car.MaxSpeed * Movement.PixelsPerKmh, ReadPlayerInput(dt), dt);
+                DriverInput rev = ReadPlayerInput(dt);
+                r.Gearbox.Update(0, r.Car.MaxSpeed * Movement.PixelsPerKmh, rev, dt);
                 r.LastSteer = 0;
+                r.LastThrottle = rev.Throttle;
                 r.UpdateGround(Track, dt);
                 continue;
             }
@@ -112,23 +153,65 @@ class Race
                 else if (r.LapsDone > 0) Audio.Lap();
             }
 
-            if (r.Finished && !FinishOrder.Contains(r))
-            {
-                FinishOrder.Add(r);
-                if (r.IsPlayer) r.Ai = new AiDriver(0.8f, 0); // autopilot cool-down lap
-            }
-
+            NoteFinish(r);
             AddSkidMarks(r);
         }
 
         ResolveCollisions();
 
-        if (Started && !Player.Finished && Raylib.IsKeyPressed(KeyboardKey.R))
+        if (Started && !Player.Finished && !InputLocked && Raylib.IsKeyPressed(KeyboardKey.R))
             Player.ResetToTrack(Track);
+
+        if (Online) SendNetwork(dt);
 
         UpdateCamera(dt);
         UpdateSounds(dt);
         Track.Scenery!.Update(dt, Player.Movement.Position);
+    }
+
+    void NoteFinish(Racer r)
+    {
+        if (!r.Finished || FinishOrder.Contains(r)) return;
+        FinishOrder.Add(r);
+        // Online, finishes can arrive a little out of order: rank by time
+        if (Online) FinishOrder.Sort((a, b) => a.FinishTime.CompareTo(b.FinishTime));
+        if (r.IsPlayer) r.Ai = new AiDriver(0.8f, 0); // autopilot cool-down lap
+    }
+
+    // Updates from the other machines: car positions, and cars that left the race
+    void ReceiveNetwork(float now)
+    {
+        netStates.Clear();
+        Net.TakeStates(netStates);
+        foreach (CarState s in netStates)
+            if (byNetId.TryGetValue(s.Id, out Racer? r) && r.Remote) r.ApplyNetState(s, now);
+
+        netRetired.Clear();
+        Net.TakeRetired(netRetired);
+        foreach (int id in netRetired)
+            if (byNetId.TryGetValue(id, out Racer? r) && r.Remote)
+            {
+                byNetId.Remove(id);
+                Racers.Remove(r); // stays in FinishOrder if it had finished
+            }
+    }
+
+    // ~30 updates a second for the cars this machine drives (your car; the host also drives the AI)
+    void SendNetwork(float dt)
+    {
+        sendTimer -= dt;
+        if (sendTimer > 0) return;
+        sendTimer = MathF.Max(sendTimer + 1f / 30f, 0);
+        foreach (Racer r in Racers)
+            if (!r.Remote && r.NetId >= 0) Net.SendState(r.NetState());
+    }
+
+    // Tell everyone the cars this machine drives are leaving the race
+    public void Retire()
+    {
+        if (!Online) return;
+        foreach (Racer r in Racers)
+            if (!r.Remote && r.NetId >= 0) Net.SendRetire(r.NetId);
     }
 
     // One-shot race sounds: start beeps, gear changes, crashes, lap chimes
@@ -188,6 +271,11 @@ class Race
 
     DriverInput ReadPlayerInput(float dt)
     {
+        if (InputLocked)
+        {
+            playerSteer = 0;
+            return default;
+        }
         float steerTarget = 0;
         if (Raylib.IsKeyDown(KeyboardKey.A) || Raylib.IsKeyDown(KeyboardKey.Left)) steerTarget -= 1;
         if (Raylib.IsKeyDown(KeyboardKey.D) || Raylib.IsKeyDown(KeyboardKey.Right)) steerTarget += 1;
@@ -246,6 +334,11 @@ class Race
         {
             for (int j = i + 1; j < Racers.Count; j++)
             {
+                // Online, each machine only pushes the cars it drives; a remote car acts like a wall
+                bool moveA = !Racers[i].Remote, moveB = !Racers[j].Remote;
+                if (!moveA && !moveB) continue;
+                float shareA = moveA ? (moveB ? 0.5f : 1f) : 0f, shareB = 1 - shareA;
+
                 Movement a = Racers[i].Movement, b = Racers[j].Movement;
                 Vector2 d = b.Position - a.Position;
                 float dist = d.Length();
@@ -253,17 +346,17 @@ class Race
 
                 Vector2 n = d / dist;
                 float overlap = radius * 2 - dist;
-                a.Position -= n * overlap / 2;
-                b.Position += n * overlap / 2;
+                a.Position -= n * overlap * shareA;
+                b.Position += n * overlap * shareB;
 
                 float approach = Vector2.Dot(b.Velocity - a.Velocity, n);
                 if (approach < 0 && (Racers[i].IsPlayer || Racers[j].IsPlayer))
                     PlayerImpact = MathF.Max(PlayerImpact, -approach);
                 if (approach < 0)
                 {
-                    float impulse = -(1 + 0.3f) * approach / 2;
-                    a.Velocity -= n * impulse;
-                    b.Velocity += n * impulse;
+                    float impulse = -(1 + 0.3f) * approach;
+                    a.Velocity -= n * impulse * shareA;
+                    b.Velocity += n * impulse * shareB;
                 }
             }
         }
