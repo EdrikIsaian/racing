@@ -5,25 +5,29 @@ using Raylib_cs;
 // The fifth car: a giant head on wheels, built at load time from a photo.
 //
 // blender/build_headcar.py cleans the photo (assets/models/headcar.png) and traces the head's side
-// profile (assets/models/headcar.json). Here that profile becomes a 3D body: every pixel column is a
-// rounded cross-section as tall as the head at that point, and narrower where the head is short
-// (the nose, the back of the skull). The photo is projected straight through from the side, so both
-// sides show the face and the top picks up the hair.
+// profile (assets/models/headcar.json). Here that profile is inflated into a 3D body: the further a
+// point is from the outline, the wider the body is there, so it rounds over on every edge and thin
+// parts (the nose, the chin) stay thin. The photo is projected straight through from the side; where
+// the surface turns away from the side, Scene3D blurs it so stretched pixels don't show as stripes.
 //
 // Model space matches the Blender cars: metres, x forward, y up, z right, ground at y = 0,
 // origin halfway between the axles (so Scene3D can place the wheels like any other car).
 static unsafe class HeadCar
 {
-    const int Ring = 40;              // vertices around each cross-section
+    const int Ring = 48;              // vertices around each cross-section
     const int Step = 2;               // pixel columns per ring
-    const float HalfWidth = 1.0f;     // metres, at the head's tallest
-    const float Roundness = 3.2f;     // superellipse exponent of the cross-section (2 = ellipse)
+    const float HalfWidth = 1.0f;     // metres, also how far in from the outline the sides are full width
+    const float BottomRound = 0.22f;  // metres: radius of the rounded edge along the sill
+    const float LowerEdge = 2f;       // the head's lower edges (jaw, chin) round over this much more gently
+    const float ThinWidth = 1.1f;     // short parts of the profile are this wide for their height
+    const float SillLine = 330;       // photo y: lower edges below this are the car's sill and arches
 
     public static Texture2D Texture { get; private set; }
     public static Texture2D Icon { get; private set; }      // the original photo, transparent background
     public static Rectangle PhotoArea { get; private set; } // the car inside the photo, for the menu icon
     public static float WheelRadius, Wheelbase, Length, Width;
     public static Color Skin;
+    public const float EdgeBlur = 3.5f; // mipmap levels of blur on surfaces facing forwards, back or up
 
     // Ray-tracing proxy: a few boxes along the car that enclose the head (model space, metres)
     public static readonly List<(Vector3 Centre, Vector3 Half)> Proxy = new();
@@ -50,55 +54,101 @@ static unsafe class HeadCar
         float minTop = top.Min();
         PhotoArea = new Rectangle(x0, minTop, top.Length, groundY - minTop);
 
-        // Cross-sections
-        int cols = (top.Length - 1) / Step + 1;
-        float maxH = 0;
-        for (int c = 0; c < top.Length; c++) maxH = Math.Max(maxH, bottom[c] - top[c]);
+        // The silhouette's outline, for the inflation below. Under the wheel arches and along the sill the
+        // body should stay full like a car's, so only the head's own lower edges (jaw, chin, under the nose)
+        // count there.
+        int n = top.Length;
+        // Smooth out the tracing's wiggles (they would ripple the whole side), then round off both ends
+        // so the back of the skull and the nose close in a dome instead of a vertical edge
+        top = Smooth(top, 6); bottom = Smooth(bottom, 4);
+        foreach (bool front in new[] { false, true })
+        {
+            int end = front ? n - 1 : 0;
+            float reach = (bottom[end] - top[end]) / 2;
+            for (int step = 0; step < reach && step < n / 4; step++)
+            {
+                int k = front ? n - 1 - step : step;
+                float mid = (top[k] + bottom[k]) / 2, f = Quarter(step / reach);
+                top[k] = mid - (mid - top[k]) * f;
+                bottom[k] = mid + (bottom[k] - mid) * f;
+            }
+        }
+        var outline = new List<Vector3>(); // x, y, and how much a distance to it counts
+        for (int k = 0; k < n; k++)
+        {
+            float px = x0 + k;
+            outline.Add(new Vector3(px, top[k], 1));
+            bool arch = wheels.Any(w => Math.Abs(px - w.X) < w.R + 8);
+            if (bottom[k] < SillLine && !arch) outline.Add(new Vector3(px, bottom[k], LowerEdge));
+        }
+        foreach (int k in new[] { 0, n - 1 })
+            for (float y = top[k]; y <= bottom[k]; y += 1) outline.Add(new Vector3(x0 + k, y, 1));
+        Vector3[] outlinePts = outline.ToArray();
 
-        int vertexCount = cols * Ring + 2;
-        int triCount = (cols - 1) * Ring * 2 + Ring * 2;
+        // How tall the head is at each column, for how tightly it rounds over (below). Wheel arches
+        // don't count, and it changes slowly, or the body would bulge in and out over the wheels.
+        var height = new float[n];
+        for (int k = 0; k < n; k++)
+        {
+            bool arch = wheels.Any(w => Math.Abs(x0 + k - w.X) < w.R + 8);
+            height[k] = (arch ? SillLine : Math.Min(bottom[k], SillLine)) - top[k];
+        }
+        height = Smooth(height, 6);
+
+        // Thickness: the silhouette is "inflated" like a balloon. A point's half-width grows with its
+        // distance from the outline along a quarter circle, so every edge rounds over (seen from the front,
+        // the top or the back) and thin parts of the profile, like the nose, stay thin.
+        float roundPx = HalfWidth / mpp, bottomPx = BottomRound / mpp;
+        float HalfWidthAt(int k, float px, float py, float b)
+        {
+            float best = float.MaxValue;
+            foreach (Vector3 o in outlinePts)
+            {
+                float dx = (o.X - px) * o.Z;
+                if (dx * dx >= best) continue;
+                float dy = (o.Y - py) * o.Z;
+                best = Math.Min(best, dx * dx + dy * dy);
+            }
+            // Where the profile is short (nose, chin, the back of the skull) the rounding is tighter, so
+            // those parts end up about as wide as they are tall rather than ballooning out
+            float r = Math.Max(Math.Min(roundPx, ThinWidth * height[k] / 2), 0.5f);
+            return r * mpp * Quarter(MathF.Sqrt(best) / r) * Quarter((b - py) / bottomPx);
+        }
+
+        int cols = (n - 1) / Step + 1;
+        int vertexCount = cols * Ring;
         var pos = new Vector3[vertexCount];
         var uv = new Vector2[vertexCount];
-        var halfW = new float[cols];
-
         for (int c = 0; c < cols; c++)
         {
-            int k = Math.Min(c * Step, top.Length - 1);
-            float px = x0 + k, t = top[k], b = bottom[k];
-            float h = Math.Max(b - t, 0.5f);
+            int k = Math.Min(c * Step, n - 1);
+            float px = x0 + k, t = top[k], b = Math.Max(bottom[k], top[k] + 0.5f);
             float x = (px - originX) * mpp;
-            float yc = (groundY - (t + b) / 2) * mpp, hh = h / 2 * mpp;
-            // Short parts of the profile (nose, back of the skull) are narrow; sqrt keeps the ends round
-            float hw = HalfWidth * MathF.Sqrt(Math.Clamp(h / (0.65f * maxH), 0.02f, 1f));
-            halfW[c] = hw;
             for (int i = 0; i < Ring; i++)
             {
+                // Round the ring from the top (i = 0) down the right side, along the bottom and back up the
+                // left; cosine spacing puts more vertices where the surface turns over the top and bottom
                 float a = i * MathF.Tau / Ring;
-                float z = hw * SignedPow(MathF.Cos(a), 2 / Roundness);
-                float y = yc + hh * SignedPow(MathF.Sin(a), 2 / Roundness);
-                pos[c * Ring + i] = new Vector3(x, y, z);
-                // Straight side projection, kept inside the outline: the top picks up the hair rather than
-                // the anti-aliased edge, the back of the head the skin rather than the photo's last column
-                float py = Math.Clamp(groundY - y / mpp, t + Math.Min(10, h * 0.4f), b - Math.Min(3, h * 0.2f));
-                uv[c * Ring + i] = new Vector2(Math.Clamp(px, x0 + 22, x0 + top.Length - 8) / imgW, py / imgH);
+                float py = (t + b) / 2 - (b - t) / 2 * MathF.Cos(a);
+                pos[c * Ring + i] = new Vector3(x, (groundY - py) * mpp, HalfWidthAt(k, px, py, b));
+                // The photo, projected straight through from the side (just inside the anti-aliased outline)
+                uv[c * Ring + i] = new Vector2(Math.Clamp(px, x0 + 2, x0 + n - 3) / imgW, Math.Clamp(py, t + Math.Min(2, (b - t) * 0.4f), b - Math.Min(1, (b - t) * 0.2f)) / imgH);
             }
         }
 
-        // End caps: a point just past each end, in the middle of the last cross-section
-        int back = cols * Ring, front = back + 1;
-        for (int e = 0; e < 2; e++)
+        // Even out the width along the length (the nearest outline point jumps around, which ripples the
+        // sides), then put each vertex on its side
+        var width = new float[cols];
+        for (int i = 0; i < Ring; i++)
         {
-            int c = e == 0 ? 0 : cols - 1;
-            Vector3 centre = Vector3.Zero;
-            for (int i = 0; i < Ring; i++) centre += pos[c * Ring + i];
-            centre /= Ring;
-            centre.X += (e == 0 ? -1 : 1) * 0.6f * halfW[c] * 0.3f;
-            pos[back + e] = centre;
-            int k = Math.Min(c * Step, top.Length - 1);
-            uv[back + e] = new Vector2((x0 + k + (e == 0 ? 22 : -8)) / (float)imgW, (top[k] + bottom[k]) / 2 / imgH);
+            for (int c = 0; c < cols; c++) width[c] = pos[c * Ring + i].Z;
+            width = Smooth(width, 6);
+            float sin = MathF.Sin(i * MathF.Tau / Ring);
+            float side = MathF.Abs(sin) < 1e-4f ? 0 : MathF.Sign(sin);
+            for (int c = 0; c < cols; c++) pos[c * Ring + i].Z = side * width[c];
         }
 
-        var idx = new List<ushort>(triCount * 3);
+        var idx = new List<ushort>((cols - 1) * Ring * 6);
         void Tri(int a, int b, int c) { idx.Add((ushort)a); idx.Add((ushort)b); idx.Add((ushort)c); }
         for (int c = 0; c < cols - 1; c++)
             for (int i = 0; i < Ring; i++)
@@ -108,18 +158,12 @@ static unsafe class HeadCar
                 Tri(a, b, e);
                 Tri(a, e, d);
             }
-        for (int i = 0; i < Ring; i++)
-        {
-            Tri(back, (i + 1) % Ring, i);
-            int l = (cols - 1) * Ring;
-            Tri(front, l + i, l + (i + 1) % Ring);
-        }
 
-        // Face the triangles outwards (check one on the side of the middle section)
+        // Face the triangles outwards (check one on the right side of the middle section)
         {
-            int c = cols / 2, a = c * Ring, b = a + 1, e = b + Ring;
-            Vector3 n = Vector3.Cross(pos[b] - pos[a], pos[e] - pos[a]);
-            if (n.Z < 0)
+            int c = cols / 2, a = c * Ring + Ring / 4, b = a + 1, e = b + Ring;
+            Vector3 nn = Vector3.Cross(pos[b] - pos[a], pos[e] - pos[a]);
+            if (nn.Z < 0)
                 for (int i = 0; i < idx.Count; i += 3) (idx[i + 1], idx[i + 2]) = (idx[i + 2], idx[i + 1]);
         }
 
@@ -160,29 +204,66 @@ static unsafe class HeadCar
         return model;
     }
 
-    // Four boxes along the length, each wrapping its stretch of the body
+    // Four boxes along the length, each fitted just inside its stretch of the body. Inside, not around:
+    // a shadow ray leaving the body's surface must not hit the car's own boxes, or the steps between
+    // them throw stripes of shadow over the roof.
     static void BuildProxy(Vector3[] pos, int cols)
     {
         Proxy.Clear();
+        // Per cross-section: a rectangle that fits inside it with a margin to spare: 60% of the full
+        // width, and the heights where the body is at least that wide plus the margin
+        const float margin = 0.12f;
+        var inner = new (float X, float Lo, float Hi, float Half)[cols];
+        for (int c = 0; c < cols; c++)
+        {
+            float maxZ = 0;
+            for (int i = 0; i < Ring; i++) maxZ = Math.Max(maxZ, pos[c * Ring + i].Z);
+            float half = 0.6f * maxZ, lo = float.MaxValue, hi = float.MinValue;
+            for (int i = 0; i < Ring; i++)
+            {
+                Vector3 v = pos[c * Ring + i];
+                if (v.Z < half + margin) continue;
+                lo = Math.Min(lo, v.Y); hi = Math.Max(hi, v.Y);
+            }
+            inner[c] = (pos[c * Ring].X, lo + margin, hi - margin, half);
+        }
+        // Leave out the narrow tips (nose, back of the skull)
+        int first = Array.FindIndex(inner, s => s.Half > 0.45f && s.Hi > s.Lo);
+        int last = Array.FindLastIndex(inner, s => s.Half > 0.45f && s.Hi > s.Lo);
         const int parts = 4;
         for (int p = 0; p < parts; p++)
         {
-            int c0 = p * (cols - 1) / parts, c1 = (p + 1) * (cols - 1) / parts;
-            Vector3 lo = new(float.MaxValue), hi = new(float.MinValue);
-            for (int c = c0; c <= c1; c++)
-                for (int i = 0; i < Ring; i++)
-                {
-                    lo = Vector3.Min(lo, pos[c * Ring + i]);
-                    hi = Vector3.Max(hi, pos[c * Ring + i]);
-                }
-            if (p == 0) lo.X = pos[cols * Ring].X;
-            if (p == parts - 1) hi.X = pos[cols * Ring + 1].X;
-            Vector3 half = (hi - lo) / 2 + new Vector3(0.01f);
-            Proxy.Add(((lo + hi) / 2, half));
+            int c0 = first + p * (last - first) / parts, c1 = first + (p + 1) * (last - first) / parts;
+            var seg = inner[c0..(c1 + 1)];
+            // Inside every cross-section it spans
+            float lo = seg.Max(s => s.Lo), hi = seg.Min(s => s.Hi), half = seg.Min(s => s.Half);
+            if (hi <= lo) continue;
+            Proxy.Add((new Vector3((seg[0].X + seg[^1].X) / 2, (lo + hi) / 2, 0),
+                       new Vector3((seg[^1].X - seg[0].X) / 2, (hi - lo) / 2, half)));
         }
     }
 
-    static float SignedPow(float v, float e) => MathF.Sign(v) * MathF.Pow(MathF.Abs(v), e);
+    // Gaussian blur of a 1D array (edges held)
+    static float[] Smooth(float[] v, float sigma)
+    {
+        int r = (int)MathF.Ceiling(sigma * 2.5f);
+        var w = Enumerable.Range(-r, 2 * r + 1).Select(j => MathF.Exp(-j * j / (2 * sigma * sigma))).ToArray();
+        var o = new float[v.Length];
+        for (int k = 0; k < v.Length; k++)
+        {
+            float sum = 0, ws = 0;
+            for (int j = -r; j <= r; j++) { sum += v[Math.Clamp(k + j, 0, v.Length - 1)] * w[j + r]; ws += w[j + r]; }
+            o[k] = sum / ws;
+        }
+        return o;
+    }
+
+    // A quarter circle: 0 at the edge, rising steeply, levelling off at 1
+    static float Quarter(float s)
+    {
+        s = Math.Clamp(s, 0, 1);
+        return MathF.Sqrt(1 - (1 - s) * (1 - s));
+    }
 
     public static void Unload()
     {

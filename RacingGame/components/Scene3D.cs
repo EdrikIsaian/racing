@@ -22,7 +22,7 @@ static unsafe class Scene3D
     static readonly Dictionary<CarType, CarModels> cars = new();
     static Model wheel, pine, round, gantry, platform;
     static Shader lit, ground, rtShadow;
-    static int litViewPos, litFog, litFogColor, litReflect, groundViewPos, groundFog, groundFogColor, rtViewPos, rtFog;
+    static int litViewPos, litFog, litFogColor, litReflect, litTexBlur, litTexSide, groundViewPos, groundFog, groundFogColor, rtViewPos, rtFog;
     static bool loaded;
 
     public static Vector3 W(Vector2 p, float height = 0) => new(p.X, height, p.Y);
@@ -35,6 +35,8 @@ static unsafe class Scene3D
         ground = Raylib.LoadShaderFromMemory(GroundVs, GroundFs);
         rtShadow = Raylib.LoadShaderFromMemory(GroundVs, RayTracing.ShadowFs);
         litReflect = Raylib.GetShaderLocation(lit, "reflectivity");
+        litTexBlur = Raylib.GetShaderLocation(lit, "texBlur");
+        litTexSide = Raylib.GetShaderLocation(lit, "texSide");
         rtViewPos = Raylib.GetShaderLocation(rtShadow, "viewPos");
         rtFog = Raylib.GetShaderLocation(rtShadow, "fogRange");
         Raylib.SetShaderValue(rtShadow, Raylib.GetShaderLocation(rtShadow, "sunDir"), SunDir, ShaderUniformDataType.Vec3);
@@ -244,7 +246,11 @@ static unsafe class Scene3D
         {
             // The photo is the paint job: skin keeps its own colour, with a faint sheen
             Reflect(0.08f);
+            float a = -pose.Heading;
+            Raylib.SetShaderValue(lit, litTexSide, new Vector3(MathF.Sin(a), 0, MathF.Cos(a)), ShaderUniformDataType.Vec3);
+            Raylib.SetShaderValue(lit, litTexBlur, HeadCar.EdgeBlur, ShaderUniformDataType.Float);
             Raylib.DrawModelEx(paint, pos, up, yaw, scl, Color.White);
+            Raylib.SetShaderValue(lit, litTexBlur, 0f, ShaderUniformDataType.Float);
         }
         else
         {
@@ -327,6 +333,8 @@ uniform vec3 viewPos;
 uniform vec3 fogColor;
 uniform vec2 fogRange;
 uniform float reflectivity;
+uniform float texBlur;  // head car: blur the side-projected photo where the surface turns away from the side
+uniform vec3 texSide;   // the car's sideways axis
 " + RayTracing.Glsl + RayTracing.ReflectGlsl + @"
 out vec4 finalColor;
 void main() {
@@ -337,7 +345,8 @@ void main() {
     if (rtOn == 1 && diff > 0.0) diff *= 1.0 - rtShadow(fragPos, n);
     float hemi = 0.5 + 0.5 * n.y;
     vec3 ambient = mix(vec3(0.26, 0.27, 0.24), vec3(0.50, 0.56, 0.66), hemi);
-    vec3 albedo = colDiffuse.rgb * texture(texture0, fragTexCoord).rgb;
+    float facing = abs(dot(n, texSide));
+    vec3 albedo = colDiffuse.rgb * texture(texture0, fragTexCoord, texBlur * (1.0 - smoothstep(0.1, 0.75, facing))).rgb;
     vec3 col = albedo * (ambient + vec3(1.0, 0.95, 0.86) * diff * 0.80);
     vec3 h = normalize(l + v);
     col += pow(max(dot(n, h), 0.0), 48.0) * 0.30 * diff;

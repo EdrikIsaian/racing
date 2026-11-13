@@ -6,7 +6,9 @@
 # Output (RacingGame/assets/models/):
 #   headcar.png   the photo, cleaned up: the photo's own wheels and the gaps around them are painted
 #                 as dark wheel arches (the game draws real 3D wheels there), white background showing
-#                 through inside the head is filled in, and a stray UI button is removed.
+#                 through inside the head is filled in, a stray UI button is removed, and everything
+#                 outside the outline is filled smoothly with the head's colours (the 3D body wraps
+#                 the photo's edges over its roof, nose and back).
 #   headcar_icon.png  the original photo on a transparent background, for the menu
 #   headcar.json  side profile of the head (top / bottom edge per pixel column), wheel positions and
 #                 the size of a pixel in metres. Scene3D builds a rounded 3D body from the profile and
@@ -112,23 +114,49 @@ by, bx = np.where(in_button)
 icon[by, bx, :3] = img[by, bx + 2 * BUTTON[2] + 4]
 Image.fromarray(icon).save(os.path.join(OUT, "headcar_icon.png"))
 
+from PIL import ImageFilter
+
+# Outside the head (and in the anti-aliased rim just inside the outline), fill in smoothly from the
+# head's own colours. The 3D body rounds over at the outline, so the rim is stretched over the roof,
+# the nose and the back of the head, and blurry (mipmapped) lookups reach past it: a smooth fill keeps
+# both free of white fringe and streaks.
+def push_pull(colour, known):
+    """Fill the unknown pixels with a smooth blend of the known ones (a pyramid fill)."""
+    if min(known.shape) <= 2 or known.all():
+        return np.where(known[..., None], colour, (colour * known[..., None]).sum((0, 1)) / max(known.sum(), 1))
+    h2, w2 = (known.shape[0] + 1) // 2, (known.shape[1] + 1) // 2
+    pc = np.zeros((h2 * 2, w2 * 2, 3)); pk = np.zeros((h2 * 2, w2 * 2))
+    pc[:known.shape[0], :known.shape[1]] = colour * known[..., None]
+    pk[:known.shape[0], :known.shape[1]] = known
+    sc = pc.reshape(h2, 2, w2, 2, 3).sum((1, 3)); sk = pk.reshape(h2, 2, w2, 2).sum((1, 3))
+    coarse = push_pull(sc / np.maximum(sk, 1e-6)[..., None], sk > 0)
+    up = np.stack([np.asarray(Image.fromarray(coarse[..., ch].astype(np.float32), "F")
+                              .resize((w2 * 2, h2 * 2), Image.BILINEAR)) for ch in range(3)], -1)
+    up = up[:known.shape[0], :known.shape[1]]
+    return np.where(known[..., None], colour, up)
+
+# Known = inside the outline, not near-white (the anti-aliased rim), a few pixels in from the edge.
+# The teeth are white but real; they stop short of the front edge so they don't smear over the nose.
+lo3 = tex.min(axis=2)
+known = (yy >= top_s[None, :] + 2) & (yy <= bottom_s[None, :]) & (xx >= x0 + 2) & (xx <= x1 - 2)
+known &= (lo3 < 190) | (teeth & (xx < 655))
+known = np.asarray(Image.fromarray((known * 255).astype(np.uint8)).filter(ImageFilter.MinFilter(7))) > 0
+tex = push_pull(tex.astype(np.float64), known)
+
+# Where the body curves over the roof, the photo's top rows are stretched across it, so pixel-to-pixel
+# changes along the hairline show up as stripes: smooth the band under the top edge along the length.
+k = 25
+row_blur = np.apply_along_axis(lambda r: np.convolve(np.pad(r, k // 2, mode="edge"), np.ones(k) / k, mode="valid"), 1, tex)
+w = np.clip(1 - (yy - top_s[None, :]) / 45, 0, 1)[..., None]
+tex = tex * (1 - w) + row_blur * w
+
 # The back of the head is seen end-on (it's what you look at while racing), where the side
 # projection stretches its pixels into stripes: blur that part of the photo vertically
-from PIL import ImageFilter
-back = Image.fromarray(tex[:, x0:x0 + 60].astype(np.uint8))
-back = np.asarray(back.filter(ImageFilter.GaussianBlur(7))).astype(np.int32)
+back = Image.fromarray(tex[:, x0:x0 + 60].clip(0, 255).astype(np.uint8))
+back = np.asarray(back.filter(ImageFilter.GaussianBlur(7)))
 ramp = np.clip((np.arange(60) - 30) / 30, 0, 1)[None, :, None]   # fade back to sharp by the ear
-tex[:, x0:x0 + 60] = (back * (1 - ramp) + tex[:, x0:x0 + 60] * ramp).astype(np.int32)
+tex[:, x0:x0 + 60] = (back * (1 - ramp) + tex[:, x0:x0 + 60] * ramp)
 
-# Outside the head, repeat the edge colours outwards so that blurry (far away, mipmapped)
-# texture lookups near the outline don't pick up white background
-for x in range(W):
-    xc = min(max(x, x0 + 3), x1 - 4)
-    t, b = int(top_s[xc]) + 4, int(bottom_s[xc]) - 2
-    tex[:t, x] = tex[t, xc]
-    tex[b:, x] = tex[b, xc]
-    if x != xc:
-        tex[t:b, x] = tex[t:b, xc]
 
 Image.fromarray(tex.astype(np.uint8)).save(os.path.join(OUT, "headcar.png"))
 
