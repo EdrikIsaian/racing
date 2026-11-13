@@ -132,8 +132,9 @@ sealed class Peer
 
     public void Close()
     {
+        if (closed) return;
         closed = true;
-        try { tcp.Close(); } catch { }
+        Task.Run(() => { try { tcp.Close(); } catch { } }); // never wait on a socket in the game loop
     }
 }
 
@@ -150,7 +151,7 @@ static class Net
     public static bool StatusIsError;
     public static readonly LobbySettings Lobby = new();
 
-    static TcpListener? listener;
+    static volatile TcpListener? listener;
     static readonly List<Peer> peers = new();             // host: joined clients
     static readonly ConcurrentBag<Peer> allPeers = new(); // host: every connection, for cleanup
     static Peer? host;                                    // client: the connection to the host
@@ -169,17 +170,28 @@ static class Net
     public static bool Host(string name, int car)
     {
         Stop();
-        try
+        // The last room's port may take a moment to free up after closing it
+        TcpListener? l0 = null;
+        for (int tries = 0; ; tries++)
         {
-            listener = new TcpListener(IPAddress.Any, Port);
-            listener.Start();
+            try
+            {
+                l0 = new TcpListener(IPAddress.Any, Port);
+                l0.Start();
+                break;
+            }
+            catch (SocketException e) when (e.SocketErrorCode == SocketError.AddressAlreadyInUse && tries < 10)
+            {
+                Thread.Sleep(50);
+            }
+            catch (Exception e)
+            {
+                SetStatus(e is SocketException { SocketErrorCode: SocketError.AddressAlreadyInUse }
+                    ? "Another room is already open on this laptop" : $"Couldn't open a room ({e.Message})", true);
+                return false;
+            }
         }
-        catch (Exception e)
-        {
-            listener = null;
-            SetStatus($"Couldn't open a room on port {Port} ({e.Message})", true);
-            return false;
-        }
+        listener = l0;
         IsHost = true;
         MyId = 0;
         nextId = 1;
@@ -193,13 +205,14 @@ static class Net
         {
             try
             {
-                while (true)
+                while (listener == l)
                 {
-                    TcpClient c = l.AcceptTcpClient();
-                    allPeers.Add(new Peer(c, q));
+                    if (l.Pending()) allPeers.Add(new Peer(l.AcceptTcpClient(), q));
+                    else Thread.Sleep(50);
                 }
             }
-            catch { } // listener stopped
+            catch { }
+            try { l.Stop(); } catch { }
         }) { IsBackground = true, Name = "net-accept" }.Start();
 
         StartBeacon();
@@ -343,6 +356,11 @@ static class Net
         }
 
         if (IsHost) UpdateBeaconText();
+        if (wantBrowse && browser == null && (browseRetry -= dt) <= 0)
+        {
+            browseRetry = 1;
+            TryBrowse();
+        }
 
         while (inbox.TryDequeue(out var item))
         {
@@ -492,15 +510,13 @@ static class Net
     static void CloseAll()
     {
         attempt = null;
-        try { listener?.Stop(); } catch { }
-        listener = null;
+        listener = null; // its thread stops listening
         foreach (Peer p in allPeers) p.Close();
         allPeers.Clear();
         peers.Clear();
         host?.Close();
         host = null;
-        beacon?.Dispose();
-        beacon = null;
+        beacon = null; // its thread closes the socket
         IsHost = false;
         MyId = -1;
         Lobby.Players.Clear();
@@ -519,7 +535,7 @@ static class Net
 
     // Looking up network interfaces is slow on macOS, so it and the broadcasting run on their own thread,
     // never in the game loop. The game only reads the results.
-    static UdpClient? beacon;
+    static volatile UdpClient? beacon;
     static volatile string beaconText = "";
     static volatile string localAddress = "…";
 
@@ -546,10 +562,11 @@ static class Net
                         catch (ObjectDisposedException) { return; }
                         catch { }
                     }
-                    Thread.Sleep(1000);
+                    for (int i = 0; i < 10 && beacon == b; i++) Thread.Sleep(100);
                 }
             }
             catch { }
+            b.Dispose();
         }) { IsBackground = true, Name = "net-beacon" }.Start();
     }
 
@@ -559,43 +576,58 @@ static class Net
         beaconText = $"RCG|{Version}|{name}|{Lobby.Players.Count}";
     }
 
-    static UdpClient? browser;
+    // On macOS, closing a socket while another thread waits on it freezes until a packet arrives.
+    // So background threads wait with a short timeout, notice they should stop, and close their own socket.
+    static volatile UdpClient? browser;
+    static bool wantBrowse;
+    static float browseRetry;
     static readonly ConcurrentDictionary<string, Room> rooms = new();
 
     public static void StartBrowsing()
     {
+        wantBrowse = true;
+        browseRetry = 0;
         if (browser != null) return;
         rooms.Clear();
+        TryBrowse();
+    }
+
+    static void TryBrowse()
+    {
         try
         {
             var u = new UdpClient();
             u.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             u.Client.Bind(new IPEndPoint(IPAddress.Any, DiscoveryPort));
+            u.Client.ReceiveTimeout = 200;
             browser = u;
             new Thread(() =>
             {
                 try
                 {
-                    while (true)
+                    while (browser == u)
                     {
                         var from = new IPEndPoint(IPAddress.Any, 0);
-                        byte[] b = u.Receive(ref from);
+                        byte[] b;
+                        try { b = u.Receive(ref from); }
+                        catch (SocketException e) when (e.SocketErrorCode == SocketError.TimedOut) { continue; }
                         string[] parts = Encoding.UTF8.GetString(b).Split('|');
                         if (parts.Length < 4 || parts[0] != "RCG" || parts[1] != Version.ToString()) continue;
                         string ip = from.Address.MapToIPv4().ToString();
                         rooms[ip] = new Room(ip, parts[2], int.TryParse(parts[3], out int n) ? n : 1, Environment.TickCount64);
                     }
                 }
-                catch { } // stopped
+                catch { }
+                u.Dispose(); // the thread closes its own socket (see above)
             }) { IsBackground = true, Name = "net-browse" }.Start();
         }
-        catch { browser = null; } // port busy: joining by address still works
+        catch { browser = null; } // port busy for now: Update tries again (joining by address works meanwhile)
     }
 
     public static void StopBrowsing()
     {
-        browser?.Dispose();
-        browser = null;
+        wantBrowse = false;
+        browser = null; // the thread sees this within 0.2 s and closes its socket
     }
 
     public static List<Room> Rooms()

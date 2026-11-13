@@ -1,2 +1,4 @@
 RacingGame/bin/
 RacingGame/obj/
+release/
+*.mov
