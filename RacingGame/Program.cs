@@ -18,6 +18,7 @@ bool screenshotRun = Environment.GetEnvironmentVariable("RACING_SCREENSHOTS") ==
 if (!screenshotRun) Raylib.ToggleBorderlessWindowed(); // start full screen
 Ui.LoadFont();
 Scene3D.Load();
+Audio.Init();
 Rlgl.SetClipPlanes(2, 15000); // world units are small (a car is ~40 long), the circuit is ~4000 across
 
 // VSync paces the frames. The FPS cap is only a safety net (e.g. when the window is hidden and
@@ -42,11 +43,13 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
         UpdateFpsCap();
     }
     if (Raylib.IsKeyPressed(KeyboardKey.F3)) PerfOverlay.Toggle();
+    if (Raylib.IsKeyPressed(KeyboardKey.M)) Audio.MusicMuted = !Audio.MusicMuted;
     PerfOverlay.Record(Raylib.GetFrameTime());
 
     // Time since last frame, capped so a hiccup doesn't teleport the cars
     float dt = MathF.Min(Raylib.GetFrameTime(), 1f / 30f);
     game.Update(dt);
+    Audio.Update(Raylib.GetFrameTime());
 
     game.PreDraw();       // off-screen 3D renders (menu showroom)
     Supersample.Begin(); // smoother edges on non-Retina screens
@@ -66,5 +69,6 @@ while (!Raylib.WindowShouldClose() && !game.QuitRequested)
 
 Supersample.Unload();
 Scene3D.Unload();
+Audio.Shutdown();
 Ui.UnloadFont();
 Raylib.CloseWindow();

@@ -7,6 +7,7 @@ struct DriverInput
     public float Brake;     // 0..1 (reverses once the car has stopped)
     public float Steer;     // -1 (left) .. 1 (right)
     public bool Handbrake;
+    public bool ShiftUp, ShiftDown; // manual gearbox, pressed this frame
 }
 
 // Top-down arcade car physics. Units are pixels and seconds.
@@ -39,7 +40,8 @@ class Movement
         return BaseTurnRate(car) * lowSpeed * (1f - 0.35f * speedRatio);
     }
 
-    public void Update(Car car, DriverInput input, bool onTrack, float dt)
+    // drive: how much the engine can push right now (from the gearbox; 0 while shifting)
+    public void Update(Car car, DriverInput input, bool onTrack, float dt, float drive = 1f)
     {
         Vector2 forward = Forward;
         Vector2 right = Right;
@@ -53,7 +55,7 @@ class Movement
         if (input.Throttle > 0 && vf < limit)
         {
             float ratio = Math.Clamp(vf / topSpeed, 0f, 1f);
-            vf += car.Acceleration * PixelsPerKmh * input.Throttle * (1f - 0.6f * ratio * ratio) * dt;
+            vf += car.Acceleration * PixelsPerKmh * input.Throttle * (1f - 0.6f * ratio * ratio) * drive * dt;
         }
 
         // Brake, or reverse once stopped

@@ -30,7 +30,13 @@ class Race
         new Color(240, 90, 160, 255),
     };
 
-    public Race(Car car, int opponents, int laps, float skill)
+    // Collisions involving the player this frame (strongest impact speed), for the crash sound
+    public float PlayerImpact;
+    int lastLit;          // start lights already lit (for the beeps)
+    float crashCooldown;
+    public Camera3D Camera => camera;
+
+    public Race(Car car, int opponents, int laps, float skill, bool manualGears = false)
     {
         Laps = laps;
         var rng = new Random();
@@ -47,6 +53,7 @@ class Race
         }
 
         Player = new Racer("You", car, car.Color, true);
+        Player.Gearbox.Manual = manualGears;
         Player.PlaceOnGrid(Track, slot);
         Racers.Add(Player);
 
@@ -60,6 +67,7 @@ class Race
         if (!Started) Countdown -= dt;
         else RaceTime += dt;
 
+        PlayerImpact = 0;
         foreach (Racer r in Racers)
         {
             DriverInput input = default;
@@ -68,15 +76,29 @@ class Race
                 if (r.IsPlayer && !r.Finished) input = ReadPlayerInput(dt);
                 else if (r.Ai != null) input = r.Ai.GetInput(r, Track, dt);
             }
+            else if (r.IsPlayer)
+            {
+                // Rev the engine on the grid (the car stays put until the lights go out)
+                r.Gearbox.Update(0, r.Car.MaxSpeed * Movement.PixelsPerKmh, ReadPlayerInput(dt), dt);
+                r.LastSteer = 0;
+                continue;
+            }
 
             r.OnTrack = Track.IsOnTrack(r.Movement.Position, r.TrackIndex);
             r.LastSteer = input.Steer;
+            r.LastThrottle = input.Throttle;
             r.Braking = input.Brake > 0 && r.Movement.ForwardSpeed > 5;
-            r.Movement.Update(r.Car, input, r.OnTrack, dt);
+            r.Gearbox.Update(r.Movement.ForwardSpeed, r.Car.MaxSpeed * Movement.PixelsPerKmh, input, dt);
+            r.Movement.Update(r.Car, input, r.OnTrack, dt, r.Gearbox.DriveFactor);
             r.UpdateVisuals(input, dt);
 
             if (r.UpdateTrackPosition(Track, RaceTime, Laps) && r.IsPlayer)
+            {
                 LastLapCompletedAt = RaceTime;
+                if (r.Finished) Audio.Finish();
+                else if (r.LapsDone == Laps - 1) Audio.FinalLap();
+                else if (r.LapsDone > 0) Audio.Lap();
+            }
 
             if (r.Finished && !FinishOrder.Contains(r))
             {
@@ -93,6 +115,62 @@ class Race
             Player.ResetToTrack(Track);
 
         UpdateCamera(dt);
+        UpdateSounds(dt);
+    }
+
+    // One-shot race sounds: start beeps, gear changes, crashes, lap chimes
+    void UpdateSounds(float dt)
+    {
+        int lit = Started ? 6 : Math.Clamp((int)((3f - Countdown) / 0.55f) + 1, 0, 5);
+        if (lit != lastLit)
+        {
+            if (lit == 6) Audio.Go();
+            else if (lit > lastLit) Audio.Beep();
+            lastLit = lit;
+        }
+
+        if (Player.Gearbox.ShiftedThisFrame != 0) Audio.Shift();
+
+        crashCooldown -= dt;
+        if (PlayerImpact > 60 && crashCooldown <= 0)
+        {
+            Audio.Crash(PlayerImpact / 400f);
+            crashCooldown = 0.25f;
+        }
+    }
+
+    // Engines, tyres and wind, placed around the camera (call every frame the race is audible)
+    public void UpdateAudio()
+    {
+        Span<EngineVoice> list = stackalloc EngineVoice[Racers.Count];
+        Vector3 forward = Vector3.Normalize(camera.Target - camera.Position);
+        Vector3 right = Vector3.Normalize(Vector3.Cross(forward, Vector3.UnitY));
+
+        for (int i = 0; i < Racers.Count; i++)
+        {
+            Racer r = Racers[i];
+            Movement m = r.Movement;
+            Vector3 d = Scene3D.W(m.Position, 8) - camera.Position;
+            float dist = d.Length();
+            float topSpeed = r.Car.MaxSpeed * Movement.PixelsPerKmh;
+            float speedRatio = Math.Clamp(m.Velocity.Length() / topSpeed, 0, 1);
+            float slide = MathF.Abs(Vector2.Dot(m.Velocity, m.Right));
+
+            list[i] = new EngineVoice
+            {
+                Rpm = r.Gearbox.Rpm,
+                Redline = r.Gearbox.Spec.RedlineRpm,
+                Throttle = r.Gearbox.Shifting ? 0.15f : r.IsPlayer && !Started ? (Raylib.IsKeyDown(KeyboardKey.W) || Raylib.IsKeyDown(KeyboardKey.Up) ? 1 : 0) : r.LastThrottle,
+                Cylinders = r.Gearbox.Spec.Cylinders,
+                Growl = r.Gearbox.Spec.Growl,
+                Volume = r.IsPlayer ? 0.5f : 0.55f / (1 + MathF.Pow(dist / 170f, 2)),
+                Pan = r.IsPlayer ? 0 : Math.Clamp(Vector3.Dot(d / MathF.Max(dist, 1), right), -1, 1) * 0.8f,
+                Skid = m.IsSkidding && r.OnTrack ? MathF.Max(0.35f, Math.Clamp((slide - 60) / 200, 0, 1)) : 0,
+                Wind = r.IsPlayer ? speedRatio * speedRatio * 0.3f : 0,
+                Gravel = r.IsPlayer && !r.OnTrack ? Math.Clamp(m.Velocity.Length() / 160, 0, 1) * 0.55f : 0,
+            };
+        }
+        Audio.SetEngines(list);
     }
 
     DriverInput ReadPlayerInput(float dt)
@@ -106,6 +184,8 @@ class Race
             Throttle = Raylib.IsKeyDown(KeyboardKey.W) || Raylib.IsKeyDown(KeyboardKey.Up) ? 1 : 0,
             Brake = Raylib.IsKeyDown(KeyboardKey.S) || Raylib.IsKeyDown(KeyboardKey.Down) ? 1 : 0,
             Handbrake = Raylib.IsKeyDown(KeyboardKey.Space),
+            ShiftUp = Raylib.IsKeyPressed(KeyboardKey.E) || Raylib.IsKeyPressed(KeyboardKey.LeftShift),
+            ShiftDown = Raylib.IsKeyPressed(KeyboardKey.Q) || Raylib.IsKeyPressed(KeyboardKey.LeftControl),
         };
 
         // Gamepad: left stick steers, right trigger = gas, left trigger = brake, A = handbrake
@@ -116,6 +196,8 @@ class Race
             if (Raylib.IsGamepadButtonDown(0, GamepadButton.RightTrigger2)) input.Throttle = 1;
             if (Raylib.IsGamepadButtonDown(0, GamepadButton.LeftTrigger2)) input.Brake = 1;
             if (Raylib.IsGamepadButtonDown(0, GamepadButton.RightFaceDown)) input.Handbrake = true;
+            if (Raylib.IsGamepadButtonPressed(0, GamepadButton.RightTrigger1)) input.ShiftUp = true;
+            if (Raylib.IsGamepadButtonPressed(0, GamepadButton.LeftTrigger1)) input.ShiftDown = true;
         }
 
         // Smooth the keyboard steering so the car doesn't twitch
@@ -162,6 +244,8 @@ class Race
                 b.Position += n * overlap / 2;
 
                 float approach = Vector2.Dot(b.Velocity - a.Velocity, n);
+                if (approach < 0 && (Racers[i].IsPlayer || Racers[j].IsPlayer))
+                    PlayerImpact = MathF.Max(PlayerImpact, -approach);
                 if (approach < 0)
                 {
                     float impulse = -(1 + 0.3f) * approach / 2;

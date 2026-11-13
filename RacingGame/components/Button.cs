@@ -40,6 +40,7 @@ class Button
         if (Hovered && Raylib.IsMouseButtonPressed(MouseButton.Left))
         {
             press = 1;
+            Audio.Click();
             OnClick();
         }
     }

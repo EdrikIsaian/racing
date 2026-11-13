@@ -8,6 +8,10 @@ static class Hud
     {
         ("W S", "Throttle / brake"), ("A D", "Steer"), ("SPACE", "Handbrake"), ("R", "Reset"), ("ESC", "Pause"),
     };
+    static readonly (string, string)[] ManualControls =
+    {
+        ("W S", "Throttle / brake"), ("A D", "Steer"), ("Q E", "Gear down / up"), ("SPACE", "Handbrake"), ("R", "Reset"), ("ESC", "Pause"),
+    };
 
     public static void Draw(Race race)
     {
@@ -26,7 +30,7 @@ static class Hud
 
         // Controls fade back once you're under way
         float alpha = race.Started ? Math.Clamp(1.2f - (race.RaceTime - 6f) / 2f, 0.28f, 1f) : 1f;
-        Ui.KeyHintsLeft(20, h - 40, Controls, alpha);
+        Ui.KeyHintsLeft(20, h - 40, p.Gearbox.Manual ? ManualControls : Controls, alpha);
     }
 
     static void DrawPositionCard(Race race, Racer p, int position, Rectangle r)
@@ -196,11 +200,15 @@ static class Hud
         Ui.DrawText(text, r.X + 26, r.Y + 10 + size * 0.08f, size, Ui.Alpha(fg, alpha), Typeface.Display, 0.1f);
     }
 
+    // Tachometer: the ring shows engine RPM (x1000) with a red zone; speed and gear in the middle
     static void DrawSpeedometer(Racer p, Vector2 c)
     {
+        Gearbox gb = p.Gearbox;
         float speed = p.Movement.CurrentSpeed;
-        float maxDial = MathF.Ceiling(p.Car.MaxSpeed / 50f) * 50f;
-        float ratio = Math.Clamp(speed / maxDial, 0f, 1f);
+        float redline = gb.Spec.RedlineRpm;
+        float maxDial = MathF.Ceiling((redline + 400) / 1000f) * 1000f;
+        float ratio = Math.Clamp(gb.Rpm / maxDial, 0f, 1f);
+        float redFrom = redline * 0.92f / maxDial;
         const float R = 112, start = 135, sweep = 270;
 
         // dial body
@@ -209,47 +217,55 @@ static class Hud
         Ui.CircleGradient(c, R, new Color(30, 34, 44, 180), new Color(10, 12, 16, 0));
         Ui.CircleLines(c, R + 6, Ui.Stroke);
 
-        // track + fill, coloured white → accent → red as you approach the limiter
+        // track, red zone, then the fill: white → accent → red towards the redline
         Raylib.DrawRing(c, R - 16, R - 8, start, start + sweep, 72, new Color(255, 255, 255, 18));
+        Raylib.DrawRing(c, R - 6, R - 3, start + sweep * redFrom, start + sweep, 24, Ui.Alpha(Ui.Bad, 0.8f));
         int segs = (int)(ratio * 60);
         for (int i = 0; i < segs; i++)
         {
             float t0 = i / 60f, t1 = (i + 1) / 60f;
-            Color col = t0 < 0.6f ? Ui.Lerp(new Color(220, 226, 236, 255), Ui.Accent, t0 / 0.6f)
-                                  : Ui.Lerp(Ui.Accent, Ui.Bad, Math.Clamp((t0 - 0.6f) / 0.3f, 0, 1));
+            Color col = t0 < redFrom * 0.7f ? Ui.Lerp(new Color(220, 226, 236, 255), Ui.Accent, t0 / (redFrom * 0.7f))
+                                            : Ui.Lerp(Ui.Accent, Ui.Bad, Math.Clamp((t0 - redFrom * 0.7f) / (redFrom * 0.3f), 0, 1));
             Raylib.DrawRing(c, R - 16, R - 8, start + sweep * t0, start + sweep * t1 + 0.4f, 2, col);
         }
         if (ratio > 0.01f)
         {
             float ang = (start + sweep * ratio) * MathF.PI / 180f;
             Vector2 tip = c + new Vector2(MathF.Cos(ang), MathF.Sin(ang)) * (R - 12);
-            Color tc = ratio < 0.6f ? Ui.TextColor : ratio < 0.9f ? Ui.Accent : Ui.Bad;
+            Color tc = ratio < redFrom * 0.7f ? Ui.TextColor : ratio < redFrom ? Ui.Accent : Ui.Bad;
             Ui.Glow(tip, 20, Ui.Alpha(tc, 0.55f));
             Ui.Circle(tip, 5, Color.White);
         }
 
-        // ticks + numerals
-        int majors = (int)(maxDial / 50);
-        for (int i = 0; i <= majors * 5; i++)
+        // ticks + numerals (thousands of RPM)
+        int majors = (int)(maxDial / 1000);
+        for (int i = 0; i <= majors * 4; i++)
         {
-            float t = i / (float)(majors * 5);
+            float t = i / (float)(majors * 4);
             float ang = (start + sweep * t) * MathF.PI / 180f;
             Vector2 d = new(MathF.Cos(ang), MathF.Sin(ang));
-            bool major = i % 5 == 0;
-            Color tc = t <= ratio ? new Color(255, 255, 255, 200) : new Color(255, 255, 255, major ? 90 : 40);
+            bool major = i % 4 == 0;
+            Color tc = t >= redFrom ? Ui.Alpha(Ui.Bad, major ? 0.9f : 0.6f) : t <= ratio ? new Color(255, 255, 255, 200) : new Color(255, 255, 255, major ? 90 : 40);
             Raylib.DrawLineEx(c + d * (R - (major ? 30 : 26)), c + d * (R - 22), major ? 2 : 1, tc);
-            if (major && (majors <= 7 || (i / 5) % 2 == 0))
+            if (major)
             {
-                string label = ((int)(t * maxDial)).ToString();
-                Vector2 lp = c + d * (R - 44);
-                Ui.TextCentered(label, lp.X, lp.Y - 6, 11, Ui.Muted, Typeface.Bold);
+                Vector2 lp = c + d * (R - 42);
+                Ui.TextCentered((i / 4).ToString(), lp.X, lp.Y - 6, 12, t >= redFrom ? Ui.Bad : Ui.Muted, Typeface.Bold);
             }
         }
 
-        Ui.TextCentered($"{speed:F0}", c.X, c.Y - 30, 58, Ui.TextColor, Typeface.Display);
-        Ui.LabelCentered("km/h", c.X, c.Y + 24, Ui.Muted);
-        if (p.Movement.ForwardSpeed < -5)
-            Ui.Pill("Reverse", c.X - 38, c.Y + 46, Ui.Bad, Color.White, 10, 20);
+        Ui.TextCentered($"{speed:F0}", c.X, c.Y - 40, 50, Ui.TextColor, Typeface.Display);
+        Ui.LabelCentered("km/h", c.X, c.Y + 8, Ui.Muted, 10);
+        Ui.LabelCentered("rpm x1000", c.X, c.Y + 70, Ui.Dim, 9);
+
+        // Gear box, with a shift light that flashes near the redline in manual mode
+        Rectangle box = new(c.X - 22, c.Y + 24, 44, 40);
+        bool shiftNow = gb.Manual && gb.Rpm > redline * 0.93f && gb.Gear < gb.Spec.Gears && !gb.Reversing;
+        bool flash = shiftNow && ((int)(Raylib.GetTime() * 12) & 1) == 0;
+        Ui.RoundRect(box, 8, flash ? Ui.Bad : gb.Reversing ? Ui.Alpha(Ui.Bad, 0.8f) : new Color(255, 255, 255, 16));
+        Ui.RoundOutline(box, 8, 1, shiftNow ? Ui.Bad : Ui.StrokeStrong);
+        Ui.TextCentered(gb.GearLabel, c.X, box.Y + 5, 34, Ui.TextColor, Typeface.Display);
+        Ui.DrawText(gb.Manual ? "M" : "A", box.X + box.Width + 5, box.Y + 4, 11, Ui.Dim, Typeface.Bold);
     }
 
     static void DrawMinimap(Race race, Rectangle area)

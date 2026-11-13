@@ -10,6 +10,7 @@ class Racer
     public bool IsPlayer;
     public AiDriver? Ai;
     public Movement Movement = new();
+    public Gearbox Gearbox;
 
     // Track progress, counted in centre-line samples. Negative = behind the start line.
     public int TrackIndex;
@@ -21,7 +22,7 @@ class Racer
     public bool Finished;
     public float FinishTime;
     public bool OnTrack = true;
-    public float LastSteer;
+    public float LastSteer, LastThrottle;
     public bool Braking;
     public Vector2? LastLeftWheel, LastRightWheel; // for skid marks
 
@@ -34,6 +35,7 @@ class Racer
         Car = car;
         Color = color;
         IsPlayer = isPlayer;
+        Gearbox = new Gearbox(EngineSpec.For(car.Type));
     }
 
     public float BestLap => LapTimes.Count > 0 ? LapTimes.Min() : 0;

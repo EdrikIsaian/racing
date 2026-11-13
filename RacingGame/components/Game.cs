@@ -29,6 +29,7 @@ class Game
     int laps = 3;
     int opponents = 3;
     int difficulty = 1;
+    bool manualGears;
     static readonly string[] DifficultyNames = { "Easy", "Normal", "Hard" };
     static readonly float[] DifficultySkill = { 0.72f, 0.88f, 0.98f };
 
@@ -43,7 +44,7 @@ class Game
     static readonly Vector2 Turntable = new(440, 404);
     const float StripX = 80, StripY = 596, StripW = 710, StripH = 66, StripGap = 10;
     static readonly Rectangle SidePanel = new(850, 96, 380, 550);
-    const float SettingsY = 384, SettingsRowH = 46;
+    const float SettingsY = 384, SettingsRowH = 42;
 
     float showcaseT = 1;   // 0 → 1 slide-in when you switch car
     int showcaseDir = 1;
@@ -56,6 +57,7 @@ class Game
         AddSelector(right, SettingsY, () => laps = Math.Max(1, laps - 1), () => laps = Math.Min(10, laps + 1));
         AddSelector(right, SettingsY + SettingsRowH, () => opponents = Math.Max(0, opponents - 1), () => opponents = Math.Min(5, opponents + 1));
         AddSelector(right, SettingsY + SettingsRowH * 2, () => difficulty = Math.Max(0, difficulty - 1), () => difficulty = Math.Min(2, difficulty + 1));
+        AddSelector(right, SettingsY + SettingsRowH * 3, () => manualGears = !manualGears, () => manualGears = !manualGears);
         menuButtons.Add(new Button(SidePanel.X + 24, SidePanel.Y + SidePanel.Height - 80, SidePanel.Width - 48, 56, "START RACE", StartRace, 26, ButtonStyle.Primary));
         menuButtons.Add(new Button(1146, 28, 84, 34, "QUIT", () => QuitRequested = true, 17, ButtonStyle.Ghost));
         menuButtons.Add(Button.Arrow(112, Turntable.Y, 46, -1, () => SelectCar(-1)));
@@ -78,6 +80,7 @@ class Game
     void SelectCar(int delta)
     {
         selectedCar = (selectedCar + delta + cars.Count) % cars.Count;
+        Audio.Whoosh();
         showcaseT = 0;
         showcaseDir = delta;
     }
@@ -86,13 +89,16 @@ class Game
 
     void StartRace()
     {
-        race = new Race(cars[selectedCar], opponents, laps, DifficultySkill[difficulty]);
+        race = new Race(cars[selectedCar], opponents, laps, DifficultySkill[difficulty], manualGears);
         resultsDelay = 0;
         state = GameState.Racing;
     }
 
     public void Update(float dt)
     {
+        if (state == GameState.Menu) Audio.PlayMenuMusic();
+        else Audio.PlayRaceMusic();
+
         switch (state)
         {
             case GameState.Menu:
@@ -101,6 +107,7 @@ class Game
 
             case GameState.Racing:
                 race!.Update(dt);
+                race.UpdateAudio();
                 if (Raylib.IsKeyPressed(KeyboardKey.Escape) || Raylib.IsKeyPressed(KeyboardKey.P))
                     state = GameState.Paused;
                 if (race.Player.Finished)
@@ -123,6 +130,7 @@ class Game
 
             case GameState.Results:
                 race!.Update(dt); // the others keep racing behind the results screen
+                race.UpdateAudio();
                 if (Raylib.IsKeyPressed(KeyboardKey.Enter)) StartRace();
                 else if (Raylib.IsKeyPressed(KeyboardKey.Escape)) state = GameState.Menu;
                 else foreach (Button b in resultsButtons) b.Update();
@@ -161,6 +169,7 @@ class Game
                 if (i != selectedCar && Raylib.CheckCollisionPointRec(Ui.Mouse, TabRect(i)))
                 {
                     showcaseDir = i > selectedCar ? 1 : -1;
+                    Audio.Whoosh();
                     selectedCar = i;
                     showcaseT = 0;
                 }
@@ -282,7 +291,7 @@ class Game
 
         foreach (Button b in menuButtons) b.Draw();
 
-        Ui.KeyHints(640, 684, new[] { ("A  D", "Choose car"), ("ENTER", "Start race"), ("F", "Full screen"), ("ESC", "Quit") });
+        Ui.KeyHints(640, 684, new[] { ("A  D", "Choose car"), ("ENTER", "Start race"), ("M", Audio.MusicMuted ? "Music off" : "Music on"), ("F", "Full screen"), ("ESC", "Quit") });
         Ui.End();
     }
 
@@ -330,15 +339,14 @@ class Game
         DrawSetting("Laps", laps.ToString(), 0);
         DrawSetting("Opponents", opponents.ToString(), 1);
         DrawSetting("Difficulty", DifficultyNames[difficulty].ToUpperInvariant(), 2);
-
-        Ui.TextCentered("Opponents drive the same car as you", p.X + p.Width / 2, p.Y + p.Height - 112, 12, Ui.Dim, Typeface.Body);
+        DrawSetting("Gearbox", manualGears ? "MANUAL" : "AUTO", 3);
 
         void DrawSetting(string label, string value, int row)
         {
             float y = SettingsY + row * SettingsRowH;
             Ui.DrawText(label, x0, y + 8, 16, Ui.TextColor, Typeface.Body);
             Ui.TextCentered(value, x1 - 75, y + 6, 24, Ui.TextColor, Typeface.Display, 0.04f);
-            if (row < 2) Raylib.DrawLineEx(new Vector2(x0, y + SettingsRowH - 7), new Vector2(x1, y + SettingsRowH - 7), 1, new Color(255, 255, 255, 10));
+            if (row < 3) Raylib.DrawLineEx(new Vector2(x0, y + SettingsRowH - 7), new Vector2(x1, y + SettingsRowH - 7), 1, new Color(255, 255, 255, 10));
         }
     }
 
